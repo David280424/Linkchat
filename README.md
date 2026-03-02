@@ -1,6 +1,6 @@
-# TextMeMail 📱
+# LinkChat
 
-TextMeMail is an **Android messaging + video call app** built with **Kotlin**, **Jetpack Compose**, **Firebase**, and **Agora RTC**.  
+LinkChat is an **Android messaging + video call app** built with **Kotlin**, **Jetpack Compose**, **Firebase**, and **Agora RTC**.  
 Current version includes authentication, account management, real‑time chat, and basic one‑to‑one video calls (test mode – no tokens required yet).
 
 ---
