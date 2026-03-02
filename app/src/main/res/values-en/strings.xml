@@ -1,0 +1,35 @@
+<resources>
+    <string name="app_name">Linkchat</string>
+
+    <!-- General -->
+    <string name="signed_in_verified">Signed in (verified)</string>
+    <string name="settings">Settings</string>
+    <string name="save">Save</string>
+    <string name="back">Back</string>
+    <string name="sign_out">Sign out</string>
+    <string name="role">Role</string>
+    <string name="language">Language</string>
+    <string name="spanish">Spanish</string>
+    <string name="english">English</string>
+
+    <!-- Auth -->
+    <string name="login">Login</string>
+    <string name="register">Create account</string>
+    <string name="name">Name</string>
+    <string name="email">Email</string>
+    <string name="password">Password</string>
+    <string name="confirm_password">Confirm password</string>
+    <string name="passwords_do_not_match">Passwords do not match</string>
+    <string name="already_have_account">Already have an account? Sign in</string>
+    <string name="no_account">Dont have an account? Create one</string>
+
+    <!-- Verify & Manage -->
+    <string name="verify_email_title">Email verification</string>
+    <string name="verify_email_message">We sent you a verification email. Until you verify, you cannot continue.</string>
+    <string name="resend_verification">Resend verification</string>
+    <string name="already_verified">I already verified</string>
+    <string name="verified_success">Email verified! You can now continue.</string>
+    <string name="verified_fail">Not verified yet.</string>
+    <string name="update_email">Update email</string>
+    <string name="reset_password">Reset password</string>
+</resources>
