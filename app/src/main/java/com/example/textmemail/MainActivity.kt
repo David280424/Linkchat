@@ -3,6 +3,7 @@ package com.example.textmemail
 
 import android.content.Context
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
@@ -18,13 +19,12 @@ import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import auth.EmailAuthManager
-import com.example.textmemail.ui_auth.AuthEmailScreen
-import com.example.textmemail.ui_auth.VerifyAndManageScreen
+import auth.PhoneAuthManager
+import com.example.textmemail.ui_auth.AdminScreen
+import com.example.textmemail.ui_auth.AuthPhoneScreen
 import com.example.textmemail.ui_chat.ChatScreen
 import com.example.textmemail.ui_chat.ContactsScreen
 import com.example.textmemail.models.Contact
-import com.example.textmemail.models.Message
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.flow.map
@@ -48,20 +48,20 @@ private fun setAppLocale(activity: ComponentActivity, langTag: String) {
 class MainActivity : ComponentActivity() {
 
     private val auth by lazy { FirebaseAuth.getInstance() }
-    private val emailAuth by lazy { EmailAuthManager(auth, FirebaseFirestore.getInstance()) }
+    private val phoneAuth by lazy { PhoneAuthManager(auth, FirebaseFirestore.getInstance()) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         setContent {
             var isLoggedIn by remember { mutableStateOf(auth.currentUser != null) }
-            var isVerified by remember { mutableStateOf(true) } // Verificacion desactivada
-            var currentEmail by remember { mutableStateOf(auth.currentUser?.email ?: "") }
+            var currentIdentifier by remember { mutableStateOf(auth.currentUser?.phoneNumber ?: auth.currentUser?.email ?: "") }
 
             var currentLanguage by remember { mutableStateOf(DEFAULT_LANG) }
             var currentRole by remember { mutableStateOf("user") }
 
             var showSettings by remember { mutableStateOf(false) }
+            var showAdmin by remember { mutableStateOf(false) }
             var showContacts by remember { mutableStateOf(false) }
             var selectedContact by remember { mutableStateOf<Contact?>(null) }
 
@@ -88,8 +88,7 @@ class MainActivity : ComponentActivity() {
                 val l = FirebaseAuth.AuthStateListener { fa ->
                     val u = fa.currentUser
                     isLoggedIn = u != null
-                    isVerified = true // Verificacion desactivada
-                    currentEmail = u?.email ?: ""
+                    currentIdentifier = u?.phoneNumber ?: u?.email ?: ""
                     if (u == null) {
                         showSettings = false
                         showContacts = false
@@ -101,24 +100,26 @@ class MainActivity : ComponentActivity() {
                 onDispose { auth.removeAuthStateListener(l) }
             }
 
-            LaunchedEffect(isLoggedIn, isVerified) {
-                if (isLoggedIn && isVerified) {
-                    emailAuth.getCurrentUserRole { ok, role, _ ->
+            // Cargar rol y contactos
+            LaunchedEffect(isLoggedIn) {
+                if (isLoggedIn) {
+                    phoneAuth.getCurrentUserRole { ok, role, _ ->
                         currentRole = if (ok && !role.isNullOrBlank()) role!! else "user"
                     }
 
                     db.collection("users").addSnapshotListener { snaps, _ ->
                         if (snaps != null) {
                             contacts = snaps.documents.mapNotNull { doc ->
+                                val phone = doc.getString("phone")
                                 val email = doc.getString("email")
                                 val name = doc.getString("name") ?: ""
+                                val displayId = phone ?: email
 
-                                // SIN FILTROS - Todos los usuarios con email válido
-                                if (!email.isNullOrBlank()) {
+                                if (!displayId.isNullOrBlank()) {
                                     Contact(
                                         uid = doc.id,
                                         name = name,
-                                        email = email
+                                        email = displayId // Usamos el campo email del modelo para el identificador
                                     )
                                 } else null
                             }
@@ -134,57 +135,52 @@ class MainActivity : ComponentActivity() {
                 Surface(Modifier.fillMaxSize()) {
                     when {
                         !isLoggedIn -> {
-                            AuthEmailScreen(
-                                onRegister = { name, email, pass, lang, done ->
-                                    emailAuth.register(name, email, pass, lang) { ok, msg ->
-                                        if (ok) {
-                                            applyLanguage(lang, recreate = true)
+                            AuthPhoneScreen(
+                                onSendCode = { phone ->
+                                    phoneAuth.sendVerificationCode(
+                                        activity = this@MainActivity,
+                                        phoneNumber = phone,
+                                        onCodeSent = { 
+                                            Toast.makeText(this@MainActivity, "Código enviado", Toast.LENGTH_SHORT).show()
+                                        },
+                                        onError = { error ->
+                                            Toast.makeText(this@MainActivity, error, Toast.LENGTH_LONG).show()
                                         }
+                                    )
+                                },
+                                onVerifyCode = { code, name, lang, done ->
+                                    phoneAuth.verifyCode(code, name, lang) { ok, msg ->
+                                        if (ok) applyLanguage(lang, recreate = true)
                                         done(ok, msg)
                                     }
                                 },
-                                onLogin = { email, pass, done ->
-                                    emailAuth.login(email, pass) { ok, msg -> done(ok, msg) }
+                                onQuickAdminLogin = { done ->
+                                    phoneAuth.quickAdminLogin { ok, msg ->
+                                        if (ok) applyLanguage(DEFAULT_LANG, recreate = true)
+                                        done(ok, msg)
+                                    }
                                 },
                                 onLanguageChanged = { lang ->
                                     applyLanguage(lang, recreate = false)
                                 }
                             )
                         }
-                        isLoggedIn && !isVerified -> {
-                            VerifyAndManageScreen(
-                                currentEmail = currentEmail,
-                                currentLanguage = currentLanguage,
-                                onResendVerification = { cb -> emailAuth.resendVerification(cb) },
-                                onCheckVerified = { cb ->
-                                    emailAuth.reloadAndIsVerified { verified ->
-                                        isVerified = verified
-                                        cb(verified)
-                                    }
-                                },
-                                onUpdateLanguage = { newLang, cb ->
-                                    emailAuth.updateLanguage(newLang) { ok, msg ->
-                                        if (ok) applyLanguage(newLang, recreate = true)
-                                        cb(ok, msg)
-                                    }
-                                },
-                                onUpdateEmail = { newEmail, cb ->
-                                    emailAuth.updateEmail(newEmail) { ok, msg ->
-                                        if (ok) currentEmail = newEmail
-                                        cb(ok, msg)
-                                    }
-                                },
-                                onPasswordReset = { email, cb -> emailAuth.sendPasswordReset(email, cb) },
-                                onSignOut = { emailAuth.signOut() }
-                            )
-                        }
                         else -> {
                             when {
+                                showAdmin -> {
+                                    AdminScreen(
+                                        users = contacts,
+                                        onDeleteUser = { contact, cb ->
+                                            phoneAuth.deleteUserFromFirestore(contact.uid, cb)
+                                        },
+                                        onBack = { showAdmin = false }
+                                    )
+                                }
                                 showSettings -> {
                                     SettingsScreen(
                                         currentLanguage = currentLanguage,
                                         onSave = { lang: String ->
-                                            emailAuth.updateLanguage(lang) { _, _ -> }
+                                            phoneAuth.updateLanguage(lang) { _, _ -> }
                                             applyLanguage(lang, recreate = true)
                                         },
                                         onClose = { showSettings = false }
@@ -208,11 +204,12 @@ class MainActivity : ComponentActivity() {
                                 }
                                 else -> {
                                     HomeScreen(
-                                        email = currentEmail,
+                                        identifier = currentIdentifier,
                                         role = currentRole,
                                         onOpenSettings = { showSettings = true },
-                                        onSignOut = { emailAuth.signOut() },
-                                        onOpenContacts = { showContacts = true }
+                                        onSignOut = { phoneAuth.signOut() },
+                                        onOpenContacts = { showContacts = true },
+                                        onOpenAdmin = if (phoneAuth.isCurrentUserAdmin()) {{ showAdmin = true }} else null
                                     )
                                 }
                             }
@@ -234,11 +231,12 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun HomeScreen(
-    email: String,
+    identifier: String,
     role: String,
     onOpenSettings: () -> Unit,
     onSignOut: () -> Unit,
-    onOpenContacts: () -> Unit
+    onOpenContacts: () -> Unit,
+    onOpenAdmin: (() -> Unit)? = null
 ) {
     Column(
         modifier = Modifier
@@ -247,23 +245,33 @@ private fun HomeScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Text(stringResource(R.string.signed_in_verified), style = MaterialTheme.typography.headlineSmall)
+        Text("Sesión iniciada", style = MaterialTheme.typography.headlineSmall)
         Spacer(Modifier.height(8.dp))
-        Text(if (email.isNotBlank()) email else "(—)")
+        Text(if (identifier.isNotBlank()) identifier else "(—)")
         Spacer(Modifier.height(8.dp))
-        Text("${stringResource(R.string.role)}: ${role.ifBlank { "user" }}")
+        Text("Rol: ${role.ifBlank { "user" }}")
         Spacer(Modifier.height(24.dp))
 
         OutlinedButton(onClick = onOpenSettings, modifier = Modifier.fillMaxWidth()) {
-            Text(stringResource(R.string.settings))
+            Text("Ajustes")
         }
         Spacer(Modifier.height(12.dp))
         Button(onClick = onSignOut, modifier = Modifier.fillMaxWidth()) {
-            Text(stringResource(R.string.sign_out))
+            Text("Cerrar sesión")
         }
         Spacer(Modifier.height(12.dp))
         Button(onClick = onOpenContacts, modifier = Modifier.fillMaxWidth()) {
             Text("Contactos")
+        }
+        if (onOpenAdmin != null) {
+            Spacer(Modifier.height(12.dp))
+            Button(
+                onClick = onOpenAdmin,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = androidx.compose.ui.graphics.Color.Red)
+            ) {
+                Text("Panel de Administrador")
+            }
         }
     }
 }
@@ -282,19 +290,19 @@ private fun SettingsScreen(
             .padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Text(stringResource(R.string.settings), style = MaterialTheme.typography.headlineSmall)
+        Text("Ajustes", style = MaterialTheme.typography.headlineSmall)
 
-        Text(stringResource(R.string.language))
+        Text("Idioma")
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             FilterChip(selected = lang == "es", onClick = { lang = "es" }, label = { Text("ES") })
             FilterChip(selected = lang == "en", onClick = { lang = "en" }, label = { Text("EN") })
         }
 
         Button(onClick = { onSave(lang) }, modifier = Modifier.fillMaxWidth()) {
-            Text(stringResource(R.string.save))
+            Text("Guardar")
         }
         TextButton(onClick = onClose) {
-            Text(stringResource(R.string.back))
+            Text("Volver")
         }
     }
 }

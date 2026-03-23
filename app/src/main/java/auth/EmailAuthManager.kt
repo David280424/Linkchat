@@ -139,7 +139,7 @@ class EmailAuthManager(
         val user = auth.currentUser ?: return done(false)
         user.reload().addOnCompleteListener {
             val isVerified = auth.currentUser?.isEmailVerified == true
-            
+
             // Actualizar estado en Firestore si está verificado
             if (isVerified) {
                 db.collection("users").document(user.uid)
@@ -150,7 +150,7 @@ class EmailAuthManager(
                         ), SetOptions.merge()
                     )
             }
-            
+
             done(isVerified)
         }
     }
@@ -201,12 +201,37 @@ class EmailAuthManager(
             .addOnFailureListener { e -> done(false, e.localizedMessage ?: "No se pudo enviar reset.") }
     }
 
+    /** Email del administrador predefinido */
+    companion object {
+        const val ADMIN_EMAIL = "admin@linkchat.com"
+    }
+
+    /** Verifica si el usuario actual es admin */
+    fun isCurrentUserAdmin(): Boolean {
+        return auth.currentUser?.email == ADMIN_EMAIL
+    }
+
+    /** Eliminar usuario de Firestore (solo borra el perfil, no de Firebase Auth) */
+    fun deleteUserFromFirestore(
+        uid: String,
+        done: (ok: Boolean, message: String) -> Unit
+    ) {
+        if (!isCurrentUserAdmin()) {
+            done(false, "No tienes permisos para realizar esta acción.")
+            return
+        }
+        db.collection("users").document(uid)
+            .delete()
+            .addOnSuccessListener { done(true, "Usuario eliminado correctamente.") }
+            .addOnFailureListener { e -> done(false, e.localizedMessage ?: "Error al eliminar usuario.") }
+    }
+
     fun signOut() = auth.signOut()
 
     /** Migrar usuarios existentes sin el campo isEmailVerified */
     fun migrateExistingUser(done: (ok: Boolean, message: String) -> Unit) {
         val user = auth.currentUser ?: return done(false, "Sin usuario.")
-        
+
         db.collection("users").document(user.uid).get()
             .addOnSuccessListener { doc ->
                 if (doc.exists()) {
@@ -220,7 +245,7 @@ class EmailAuthManager(
                                     "updatedAt" to FieldValue.serverTimestamp()
                                 ), SetOptions.merge()
                             )
-                            .addOnSuccessListener { 
+                            .addOnSuccessListener {
                                 done(true, "Usuario migrado correctamente.")
                             }
                             .addOnFailureListener { e ->
