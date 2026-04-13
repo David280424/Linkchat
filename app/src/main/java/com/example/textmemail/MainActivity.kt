@@ -6,13 +6,23 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.*
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -56,7 +66,6 @@ class MainActivity : ComponentActivity() {
         setContent {
             var isLoggedIn by remember { mutableStateOf(auth.currentUser != null) }
             var currentIdentifier by remember { mutableStateOf(auth.currentUser?.phoneNumber ?: auth.currentUser?.email ?: "") }
-
             var currentLanguage by remember { mutableStateOf(DEFAULT_LANG) }
             var currentRole by remember { mutableStateOf("user") }
 
@@ -64,12 +73,10 @@ class MainActivity : ComponentActivity() {
             var showAdmin by remember { mutableStateOf(false) }
             var showContacts by remember { mutableStateOf(false) }
             var selectedContact by remember { mutableStateOf<Contact?>(null) }
-
             var contacts by remember { mutableStateOf(listOf<Contact>()) }
 
             val db = FirebaseFirestore.getInstance()
 
-            // Observa DataStore
             LaunchedEffect(Unit) {
                 lifecycleScope.launch {
                     repeatOnLifecycle(Lifecycle.State.STARTED) {
@@ -83,7 +90,6 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // Listener de Auth
             DisposableEffect(Unit) {
                 val l = FirebaseAuth.AuthStateListener { fa ->
                     val u = fa.currentUser
@@ -100,7 +106,6 @@ class MainActivity : ComponentActivity() {
                 onDispose { auth.removeAuthStateListener(l) }
             }
 
-            // Cargar rol y contactos
             LaunchedEffect(isLoggedIn) {
                 if (isLoggedIn) {
                     phoneAuth.getCurrentUserRole { ok, role, _ ->
@@ -114,39 +119,47 @@ class MainActivity : ComponentActivity() {
                                 val email = doc.getString("email")
                                 val name = doc.getString("name") ?: ""
                                 val displayId = phone ?: email
-
                                 if (!displayId.isNullOrBlank()) {
-                                    Contact(
-                                        uid = doc.id,
-                                        name = name,
-                                        email = displayId // Usamos el campo email del modelo para el identificador
-                                    )
+                                    Contact(uid = doc.id, name = name, email = displayId)
                                 } else null
                             }
                         }
                     }
-                } else {
-                    currentRole = "user"
-                    contacts = emptyList()
                 }
             }
 
-            MaterialTheme {
-                Surface(Modifier.fillMaxSize()) {
-                    when {
-                        !isLoggedIn -> {
-                            AuthPhoneScreen(
+            MaterialTheme(
+                colorScheme = lightColorScheme(
+                    primary = Color(0xFF673AB7),
+                    secondary = Color(0xFF00BFA5),
+                    background = Color(0xFFF5F5F7)
+                )
+            ) {
+                Surface(modifier = Modifier.fillMaxSize()) {
+                    val navigationState = when {
+                        !isLoggedIn -> "auth"
+                        showAdmin -> "admin"
+                        showSettings -> "settings"
+                        selectedContact != null -> "chat"
+                        showContacts -> "contacts"
+                        else -> "home"
+                    }
+
+                    AnimatedContent(
+                        targetState = navigationState,
+                        transitionSpec = {
+                            fadeIn(animationSpec = tween(400)) togetherWith fadeOut(animationSpec = tween(400))
+                        },
+                        label = "ScreenTransition"
+                    ) { state ->
+                        when (state) {
+                            "auth" -> AuthPhoneScreen(
                                 onSendCode = { phone ->
-                                    phoneAuth.sendVerificationCode(
-                                        activity = this@MainActivity,
-                                        phoneNumber = phone,
-                                        onCodeSent = { 
-                                            Toast.makeText(this@MainActivity, "Código enviado", Toast.LENGTH_SHORT).show()
-                                        },
-                                        onError = { error ->
-                                            Toast.makeText(this@MainActivity, error, Toast.LENGTH_LONG).show()
-                                        }
-                                    )
+                                    phoneAuth.sendVerificationCode(this@MainActivity, phone, {
+                                        Toast.makeText(this@MainActivity, "Código enviado", Toast.LENGTH_SHORT).show()
+                                    }, { error ->
+                                        Toast.makeText(this@MainActivity, error, Toast.LENGTH_LONG).show()
+                                    })
                                 },
                                 onVerifyCode = { code, name, lang, done ->
                                     phoneAuth.verifyCode(code, name, lang) { ok, msg ->
@@ -160,59 +173,41 @@ class MainActivity : ComponentActivity() {
                                         done(ok, msg)
                                     }
                                 },
-                                onLanguageChanged = { lang ->
-                                    applyLanguage(lang, recreate = false)
+                                onLanguageChanged = { lang -> applyLanguage(lang, recreate = false) }
+                            )
+                            "admin" -> AdminScreen(
+                                users = contacts,
+                                onDeleteUser = { contact, cb -> phoneAuth.deleteUserFromFirestore(contact.uid, cb) },
+                                onBack = { showAdmin = false }
+                            )
+                            "settings" -> SettingsScreen(
+                                currentLanguage = currentLanguage,
+                                onSave = { lang ->
+                                    phoneAuth.updateLanguage(lang) { _, _ -> }
+                                    applyLanguage(lang, recreate = true)
+                                },
+                                onClose = { showSettings = false }
+                            )
+                            "contacts" -> ContactsScreen(
+                                contacts = contacts,
+                                onBack = { showContacts = false },
+                                onOpenChat = { contact ->
+                                    selectedContact = contact
                                 }
                             )
-                        }
-                        else -> {
-                            when {
-                                showAdmin -> {
-                                    AdminScreen(
-                                        users = contacts,
-                                        onDeleteUser = { contact, cb ->
-                                            phoneAuth.deleteUserFromFirestore(contact.uid, cb)
-                                        },
-                                        onBack = { showAdmin = false }
-                                    )
-                                }
-                                showSettings -> {
-                                    SettingsScreen(
-                                        currentLanguage = currentLanguage,
-                                        onSave = { lang: String ->
-                                            phoneAuth.updateLanguage(lang) { _, _ -> }
-                                            applyLanguage(lang, recreate = true)
-                                        },
-                                        onClose = { showSettings = false }
-                                    )
-                                }
-                                showContacts -> {
-                                    ContactsScreen(
-                                        contacts = contacts,
-                                        onBack = { showContacts = false },
-                                        onOpenChat = { contact ->
-                                            selectedContact = contact
-                                            showContacts = false
-                                        }
-                                    )
-                                }
-                                selectedContact != null -> {
-                                    ChatScreen(
-                                        contact = selectedContact!!,
-                                        onBack = { selectedContact = null }
-                                    )
-                                }
-                                else -> {
-                                    HomeScreen(
-                                        identifier = currentIdentifier,
-                                        role = currentRole,
-                                        onOpenSettings = { showSettings = true },
-                                        onSignOut = { phoneAuth.signOut() },
-                                        onOpenContacts = { showContacts = true },
-                                        onOpenAdmin = if (phoneAuth.isCurrentUserAdmin()) {{ showAdmin = true }} else null
-                                    )
-                                }
-                            }
+                            "chat" -> ChatScreen(
+                                contact = selectedContact!!,
+                                allContacts = contacts,
+                                onBack = { selectedContact = null }
+                            )
+                            else -> HomeScreen(
+                                identifier = currentIdentifier,
+                                role = currentRole,
+                                onOpenSettings = { showSettings = true },
+                                onSignOut = { phoneAuth.signOut() },
+                                onOpenContacts = { showContacts = true },
+                                onOpenAdmin = if (phoneAuth.isCurrentUserAdmin()) {{ showAdmin = true }} else null
+                            )
                         }
                     }
                 }
@@ -238,40 +233,76 @@ private fun HomeScreen(
     onOpenContacts: () -> Unit,
     onOpenAdmin: (() -> Unit)? = null
 ) {
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .padding(24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+            .background(
+                brush = Brush.verticalGradient(
+                    colors = listOf(Color(0xFFEDE7F6), Color(0xFFF5F5F7))
+                )
+            )
     ) {
-        Text("Sesión iniciada", style = MaterialTheme.typography.headlineSmall)
-        Spacer(Modifier.height(8.dp))
-        Text(if (identifier.isNotBlank()) identifier else "(—)")
-        Spacer(Modifier.height(8.dp))
-        Text("Rol: ${role.ifBlank { "user" }}")
-        Spacer(Modifier.height(24.dp))
+        Column(
+            modifier = Modifier.fillMaxSize().padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically)
+        ) {
+            Icon(
+                imageVector = Icons.Default.AccountCircle,
+                contentDescription = null,
+                modifier = Modifier.size(100.dp),
+                tint = MaterialTheme.colorScheme.primary
+            )
 
-        OutlinedButton(onClick = onOpenSettings, modifier = Modifier.fillMaxWidth()) {
-            Text("Ajustes")
-        }
-        Spacer(Modifier.height(12.dp))
-        Button(onClick = onSignOut, modifier = Modifier.fillMaxWidth()) {
-            Text("Cerrar sesión")
-        }
-        Spacer(Modifier.height(12.dp))
-        Button(onClick = onOpenContacts, modifier = Modifier.fillMaxWidth()) {
-            Text("Contactos")
-        }
-        if (onOpenAdmin != null) {
-            Spacer(Modifier.height(12.dp))
-            Button(
-                onClick = onOpenAdmin,
+            Text(
+                "¡Bienvenido!",
+                style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold)
+            )
+
+            Card(
                 modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.buttonColors(containerColor = androidx.compose.ui.graphics.Color.Red)
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White)
             ) {
-                Text("Panel de Administrador")
+                Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(identifier.ifBlank { "Usuario" }, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
+                    Text("Rol: ${role.replaceFirstChar { it.uppercase() }}", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                }
             }
+
+            Spacer(Modifier.height(8.dp))
+
+            HomeButton("Ver Contactos y Chat", Icons.Default.Chat, onOpenContacts, MaterialTheme.colorScheme.primary)
+            HomeButton("Configuración", Icons.Default.Settings, onOpenSettings, MaterialTheme.colorScheme.secondary)
+            
+            if (onOpenAdmin != null) {
+                HomeButton("Panel de Administración", Icons.Default.AdminPanelSettings, onOpenAdmin, Color(0xFFE53935))
+            }
+
+            TextButton(onClick = onSignOut) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Logout, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Cerrar sesión", color = Color.Gray)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun HomeButton(text: String, icon: ImageVector, onClick: () -> Unit, color: Color) {
+    Button(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth().height(56.dp),
+        shape = RoundedCornerShape(12.dp),
+        colors = ButtonDefaults.buttonColors(containerColor = color),
+        elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp)
+    ) {
+        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(24.dp))
+            Spacer(Modifier.width(12.dp))
+            Text(text, fontWeight = FontWeight.SemiBold)
         }
     }
 }
@@ -284,25 +315,45 @@ private fun SettingsScreen(
 ) {
     var lang by remember { mutableStateOf(currentLanguage) }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        Text("Ajustes", style = MaterialTheme.typography.headlineSmall)
-
-        Text("Idioma")
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            FilterChip(selected = lang == "es", onClick = { lang = "es" }, label = { Text("ES") })
-            FilterChip(selected = lang == "en", onClick = { lang = "en" }, label = { Text("EN") })
+    Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onClose) { Icon(Icons.Default.ArrowBack, contentDescription = "Atrás", modifier = Modifier.size(24.dp)) }
+            Text("Ajustes", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+        }
+        
+        Spacer(Modifier.height(24.dp))
+        
+        Text("Idioma de la aplicación", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(12.dp))
+        
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(
+                selected = lang == "es",
+                onClick = { lang = "es" },
+                label = { Text("Español") },
+                shape = RoundedCornerShape(12.dp)
+            )
+            FilterChip(
+                selected = lang == "en",
+                onClick = { lang = "en" },
+                label = { Text("English") },
+                shape = RoundedCornerShape(12.dp)
+            )
         }
 
-        Button(onClick = { onSave(lang) }, modifier = Modifier.fillMaxWidth()) {
-            Text("Guardar")
-        }
-        TextButton(onClick = onClose) {
-            Text("Volver")
+        Spacer(Modifier.weight(1f))
+        
+        Button(
+            onClick = { onSave(lang) },
+            modifier = Modifier.fillMaxWidth().height(56.dp),
+            shape = RoundedCornerShape(12.dp)
+        ) {
+            Text("Guardar Cambios")
         }
     }
+}
+
+@Composable
+private fun Icon(imageVector: ImageVector, contentDescription: String?, modifier: Modifier) {
+    androidx.compose.material3.Icon(imageVector, contentDescription, modifier)
 }

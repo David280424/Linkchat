@@ -56,4 +56,16 @@ object ChatManager {
                 onMessages(list)
             }
     }
+
+    fun deleteMessage(
+        otherUid: String,
+        messageId: String,
+        onResult: (ok: Boolean, error: String?) -> Unit
+    ) {
+        val chatId = chatIdWith(otherUid)
+        db.collection("chats").document(chatId).collection("messages").document(messageId)
+            .delete()
+            .addOnSuccessListener { onResult(true, null) }
+            .addOnFailureListener { e -> onResult(false, e.localizedMessage) }
+    }
 }
