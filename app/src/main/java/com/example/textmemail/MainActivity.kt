@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.animation.*
 import androidx.compose.animation.core.tween
@@ -20,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -51,7 +53,6 @@ private fun setAppLocale(activity: ComponentActivity, langTag: String) {
     Locale.setDefault(locale)
     val cfg = activity.resources.configuration
     cfg.setLocale(locale)
-    activity.createConfigurationContext(cfg)
     activity.resources.updateConfiguration(cfg, activity.resources.displayMetrics)
 }
 
@@ -76,6 +77,18 @@ class MainActivity : ComponentActivity() {
             var contacts by remember { mutableStateOf(listOf<Contact>()) }
 
             val db = FirebaseFirestore.getInstance()
+
+            BackHandler(enabled = isLoggedIn && (selectedContact != null || showContacts || showAdmin || showSettings)) {
+                if (selectedContact != null) {
+                    selectedContact = null
+                } else if (showContacts) {
+                    showContacts = false
+                } else if (showAdmin) {
+                    showAdmin = false
+                } else if (showSettings) {
+                    showSettings = false
+                }
+            }
 
             LaunchedEffect(Unit) {
                 lifecycleScope.launch {
@@ -148,18 +161,20 @@ class MainActivity : ComponentActivity() {
                     AnimatedContent(
                         targetState = navigationState,
                         transitionSpec = {
-                            fadeIn(animationSpec = tween(400)) togetherWith fadeOut(animationSpec = tween(400))
+                            fadeIn(animationSpec = tween(300)) togetherWith fadeOut(animationSpec = tween(300))
                         },
-                        label = "ScreenTransition"
+                        label = "MainNavigation"
                     ) { state ->
                         when (state) {
                             "auth" -> AuthPhoneScreen(
-                                onSendCode = { phone ->
-                                    phoneAuth.sendVerificationCode(this@MainActivity, phone, {
-                                        Toast.makeText(this@MainActivity, "Código enviado", Toast.LENGTH_SHORT).show()
-                                    }, { error ->
-                                        Toast.makeText(this@MainActivity, error, Toast.LENGTH_LONG).show()
-                                    })
+                                onSendCode = { phone, callback ->
+                                    // CORREGIDO: Coincide con PhoneAuthManager.sendVerificationCode(activity, phone, callback)
+                                    phoneAuth.sendVerificationCode(this@MainActivity, phone) { success, errorMsg ->
+                                        if (success) {
+                                            Toast.makeText(this@MainActivity, "Código enviado", Toast.LENGTH_SHORT).show()
+                                        }
+                                        callback(success, errorMsg)
+                                    }
                                 },
                                 onVerifyCode = { code, name, lang, done ->
                                     phoneAuth.verifyCode(code, name, lang) { ok, msg ->
@@ -191,15 +206,18 @@ class MainActivity : ComponentActivity() {
                             "contacts" -> ContactsScreen(
                                 contacts = contacts,
                                 onBack = { showContacts = false },
-                                onOpenChat = { contact ->
-                                    selectedContact = contact
+                                onOpenChat = { contact -> selectedContact = contact }
+                            )
+                            "chat" -> {
+                                val chatTarget = remember { selectedContact }
+                                if (chatTarget != null) {
+                                    ChatScreen(
+                                        contact = chatTarget,
+                                        allContacts = contacts,
+                                        onBack = { selectedContact = null }
+                                    )
                                 }
-                            )
-                            "chat" -> ChatScreen(
-                                contact = selectedContact!!,
-                                allContacts = contacts,
-                                onBack = { selectedContact = null }
-                            )
+                            }
                             else -> HomeScreen(
                                 identifier = currentIdentifier,
                                 role = currentRole,
@@ -254,10 +272,7 @@ private fun HomeScreen(
                 tint = MaterialTheme.colorScheme.primary
             )
 
-            Text(
-                "¡Bienvenido!",
-                style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold)
-            )
+            Text(stringResource(R.string.welcome), style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold))
 
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -266,24 +281,24 @@ private fun HomeScreen(
             ) {
                 Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(identifier.ifBlank { "Usuario" }, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
-                    Text("Rol: ${role.replaceFirstChar { it.uppercase() }}", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
+                    Text("${stringResource(R.string.role)}: ${role.replaceFirstChar { it.uppercase() }}", style = MaterialTheme.typography.bodySmall, color = Color.Gray)
                 }
             }
 
             Spacer(Modifier.height(8.dp))
 
-            HomeButton("Ver Contactos y Chat", Icons.Default.Chat, onOpenContacts, MaterialTheme.colorScheme.primary)
-            HomeButton("Configuración", Icons.Default.Settings, onOpenSettings, MaterialTheme.colorScheme.secondary)
+            HomeButton(stringResource(R.string.contacts_chat), Icons.Default.Chat, onOpenContacts, MaterialTheme.colorScheme.primary)
+            HomeButton(stringResource(R.string.settings), Icons.Default.Settings, onOpenSettings, MaterialTheme.colorScheme.secondary)
             
             if (onOpenAdmin != null) {
-                HomeButton("Panel de Administración", Icons.Default.AdminPanelSettings, onOpenAdmin, Color(0xFFE53935))
+                HomeButton(stringResource(R.string.admin_panel), Icons.Default.AdminPanelSettings, onOpenAdmin, Color(0xFFE53935))
             }
 
             TextButton(onClick = onSignOut) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.Logout, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.width(8.dp))
-                    Text("Cerrar sesión", color = Color.Gray)
+                    Text(stringResource(R.string.sign_out), color = Color.Gray)
                 }
             }
         }
@@ -317,26 +332,26 @@ private fun SettingsScreen(
 
     Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onClose) { Icon(Icons.Default.ArrowBack, contentDescription = "Atrás", modifier = Modifier.size(24.dp)) }
-            Text("Ajustes", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+            IconButton(onClick = onClose) { Icon(Icons.Default.ArrowBack, contentDescription = stringResource(R.string.back), modifier = Modifier.size(24.dp)) }
+            Text(stringResource(R.string.settings), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         }
         
         Spacer(Modifier.height(24.dp))
         
-        Text("Idioma de la aplicación", style = MaterialTheme.typography.titleMedium)
+        Text(stringResource(R.string.app_language), style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(12.dp))
         
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(
                 selected = lang == "es",
                 onClick = { lang = "es" },
-                label = { Text("Español") },
+                label = { Text(stringResource(R.string.spanish)) },
                 shape = RoundedCornerShape(12.dp)
             )
             FilterChip(
                 selected = lang == "en",
                 onClick = { lang = "en" },
-                label = { Text("English") },
+                label = { Text(stringResource(R.string.english)) },
                 shape = RoundedCornerShape(12.dp)
             )
         }
@@ -348,12 +363,7 @@ private fun SettingsScreen(
             modifier = Modifier.fillMaxWidth().height(56.dp),
             shape = RoundedCornerShape(12.dp)
         ) {
-            Text("Guardar Cambios")
+            Text(stringResource(R.string.save_changes))
         }
     }
-}
-
-@Composable
-private fun Icon(imageVector: ImageVector, contentDescription: String?, modifier: Modifier) {
-    androidx.compose.material3.Icon(imageVector, contentDescription, modifier)
 }

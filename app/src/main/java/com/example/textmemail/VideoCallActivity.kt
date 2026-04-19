@@ -5,328 +5,259 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.SurfaceView
-import android.view.View
-import android.widget.FrameLayout
-import android.widget.ImageButton
+import android.view.WindowManager
 import android.widget.Toast
-import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CallEnd
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material.icons.filled.VideocamOff
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import io.agora.rtc2.*
 import io.agora.rtc2.video.VideoCanvas
 
-class VideoCallActivity : AppCompatActivity() {
+class VideoCallActivity : ComponentActivity() {
 
-    // Tu App ID de Agora (Proyecto en modo test)
-    private val appId = ""
-    
-    // Views
-    private lateinit var localContainer: FrameLayout
-    private lateinit var remoteContainer: FrameLayout
-    private lateinit var endCallButton: ImageButton
-    private lateinit var muteButton: ImageButton
-    private lateinit var videoButton: ImageButton
-    
-    // Agora
+    private val appId = "011681283d5843468537b01ee700c0a9"
     private var mRtcEngine: RtcEngine? = null
-    private var isJoined = false
-    private var localSurfaceView: SurfaceView? = null
-    private var remoteSurfaceView: SurfaceView? = null
     
-    // Estado
-    private var isMuted = false
-    private var isVideoEnabled = true
-    
-    // Channel info
-    private lateinit var channelName: String
-    private lateinit var token: String
-    private var uid = 0
-
-    companion object {
-        private const val PERMISSION_REQ_ID = 22
-        private val REQUESTED_PERMISSIONS = arrayOf(
-            Manifest.permission.RECORD_AUDIO,
-            Manifest.permission.CAMERA
-        )
-    }
+    // State managed by the Activity to ensure lifecycle consistency with Agora
+    private val remoteUidState = mutableStateOf<Int?>(null)
+    private val isMutedState = mutableStateOf(false)
+    private val isVideoEnabledState = mutableStateOf(true)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Obtener parámetros del intent ANTES de crear layout
-        channelName = intent.getStringExtra("CHANNEL_NAME") ?: run {
-            Toast.makeText(this, "Nombre de canal faltante", Toast.LENGTH_SHORT).show()
+        // Mantener pantalla encendida y extender a barra de estado
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        
+        val channelName = intent.getStringExtra("CHANNEL_NAME") ?: run {
+            Toast.makeText(this, "Canal no válido", Toast.LENGTH_SHORT).show()
             finish()
             return
         }
-        token = intent.getStringExtra("TOKEN") ?: ""
-        
-        // Crear layout programáticamente
-        setContentView(createVideoCallLayout())
-        
-        println("📱 VideoCallActivity iniciada con canal: $channelName")
-        
-        // Verificar permisos DESPUÉS de configurar la UI
+        val token = intent.getStringExtra("TOKEN") ?: ""
+
         if (checkSelfPermission()) {
-            // Delay pequeño para asegurar que la UI esté lista
-            window.decorView.post {
-                initializeEngine()
+            initAgora(channelName, token)
+        }
+
+        setContent {
+            MaterialTheme {
+                VideoCallScreen(
+                    remoteUid = remoteUidState.value,
+                    isMuted = isMutedState.value,
+                    isVideoEnabled = isVideoEnabledState.value,
+                    onToggleMute = { toggleMute() },
+                    onToggleVideo = { toggleVideo() },
+                    onEndCall = { leaveChannel() },
+                    setupLocalVideo = { view -> 
+                        mRtcEngine?.setupLocalVideo(VideoCanvas(view, VideoCanvas.RENDER_MODE_HIDDEN, 0)) 
+                    },
+                    setupRemoteVideo = { view, uid -> 
+                        mRtcEngine?.setupRemoteVideo(VideoCanvas(view, VideoCanvas.RENDER_MODE_HIDDEN, uid)) 
+                    }
+                )
             }
         }
     }
 
-    private fun createVideoCallLayout(): View {
-        val rootLayout = FrameLayout(this).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
-        }
-
-        // Container remoto (pantalla completa)
-        remoteContainer = FrameLayout(this).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
-            )
-            setBackgroundColor(0xFF000000.toInt())
-        }
-
-        // Container local (esquina superior derecha)
-        localContainer = FrameLayout(this).apply {
-            val params = FrameLayout.LayoutParams(200, 300)
-            params.topMargin = 100
-            params.rightMargin = 50
-            params.gravity = android.view.Gravity.TOP or android.view.Gravity.RIGHT
-            layoutParams = params
-            setBackgroundColor(0xFF333333.toInt())
-        }
-
-        // Botones de control
-        val controlsLayout = createControlsLayout()
-
-        rootLayout.addView(remoteContainer)
-        rootLayout.addView(localContainer)
-        rootLayout.addView(controlsLayout)
-
-        return rootLayout
-    }
-
-    private fun createControlsLayout(): View {
-        val layout = android.widget.LinearLayout(this).apply {
-            val params = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT
-            )
-            params.gravity = android.view.Gravity.BOTTOM or android.view.Gravity.CENTER_HORIZONTAL
-            params.bottomMargin = 100
-            layoutParams = params
-            orientation = android.widget.LinearLayout.HORIZONTAL
-        }
-
-        muteButton = ImageButton(this).apply {
-            setImageResource(android.R.drawable.ic_btn_speak_now)
-            setOnClickListener { toggleMute() }
-        }
-
-        videoButton = ImageButton(this).apply {
-            setImageResource(android.R.drawable.presence_video_online)
-            setOnClickListener { toggleVideo() }
-        }
-
-        endCallButton = ImageButton(this).apply {
-            setImageResource(android.R.drawable.ic_menu_call)
-            setOnClickListener { leaveChannel() }
-        }
-
-        layout.addView(muteButton)
-        layout.addView(videoButton)
-        layout.addView(endCallButton)
-
-        return layout
-    }
-
-    private fun checkSelfPermission(): Boolean {
-        return if (ContextCompat.checkSelfPermission(this, REQUESTED_PERMISSIONS[0]) != PackageManager.PERMISSION_GRANTED ||
-            ContextCompat.checkSelfPermission(this, REQUESTED_PERMISSIONS[1]) != PackageManager.PERMISSION_GRANTED
-        ) {
-            ActivityCompat.requestPermissions(this, REQUESTED_PERMISSIONS, PERMISSION_REQ_ID)
-            false
-        } else {
-            true
-        }
-    }
-
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == PERMISSION_REQ_ID && grantResults.all { it == PackageManager.PERMISSION_GRANTED }) {
-            initializeEngine()
-        } else {
-            Toast.makeText(this, "Permisos de cámara y micrófono requeridos", Toast.LENGTH_SHORT).show()
-            finish()
-        }
-    }
-
-    private fun initializeEngine() {
+    private fun initAgora(channelName: String, token: String) {
         try {
-            println("🚀 INICIANDO VIDEOLLAMADA:")
-            println("   - App ID: $appId")
-            println("   - Channel: $channelName")
-            println("   - Token: ${if (token.isEmpty()) "SIN TOKEN" else "CON TOKEN"}")
-            
-            // Verificar que el App ID no esté vacío
-            if (appId.isBlank()) {
-                throw Exception("App ID está vacío")
-            }
-            
-            // Crear configuración con try-catch específico
             val config = RtcEngineConfig()
             config.mContext = baseContext
             config.mAppId = appId
-            config.mEventHandler = mRtcEventHandler
-            
-            println("✅ Config creado, inicializando RtcEngine...")
-            
-            // Inicializar RtcEngine con manejo específico
-            try {
-                mRtcEngine = RtcEngine.create(config)
-                println("✅ RtcEngine creado exitosamente")
-            } catch (e: Exception) {
-                println("❌ Error específico creando RtcEngine: ${e.message}")
-                throw Exception("No se pudo crear RtcEngine: ${e.message}")
+            config.mEventHandler = object : IRtcEngineEventHandler() {
+                override fun onUserJoined(uid: Int, elapsed: Int) {
+                    remoteUidState.value = uid
+                }
+
+                override fun onUserOffline(uid: Int, reason: Int) {
+                    remoteUidState.value = null
+                }
+
+                override fun onJoinChannelSuccess(channel: String?, uid: Int, elapsed: Int) {
+                    println("Conectado exitosamente al canal: $channel")
+                }
             }
-            
-            // Configurar video
+            mRtcEngine = RtcEngine.create(config)
             mRtcEngine?.enableVideo()
-            println("✅ Video habilitado")
             
-            setupLocalVideo()
-            println("✅ Video local configurado")
-            
-            joinChannel()
-            println("✅ Intentando unirse al canal...")
+            val options = ChannelMediaOptions().apply {
+                channelProfile = Constants.CHANNEL_PROFILE_COMMUNICATION
+                clientRoleType = Constants.CLIENT_ROLE_BROADCASTER
+            }
+            mRtcEngine?.joinChannel(if (token.isEmpty()) null else token, channelName, 0, options)
             
         } catch (e: Exception) {
-            println("❌ ERROR en initializeEngine: ${e.message}")
-            e.printStackTrace()
-            
-            val errorMessage = when {
-                e.message?.contains("101") == true -> "Error 101: Verifica tu App ID de Agora y conexión a internet"
-                e.message?.contains("110") == true -> "Error 110: Token requerido. Cambia tu proyecto Agora a 'Testing Mode' en console.agora.io"
-                e.message?.contains("2") == true -> "No tienes permisos de cámara/micrófono"
-                else -> "Error inicializando videollamada: ${e.message}"
-            }
-            
-            Toast.makeText(this, errorMessage, Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Error inicializando Agora", Toast.LENGTH_SHORT).show()
             finish()
         }
     }
 
-    private val mRtcEventHandler = object : IRtcEngineEventHandler() {
-        override fun onUserJoined(uid: Int, elapsed: Int) {
-            println("👥 Usuario se unió: $uid")
-            runOnUiThread { setupRemoteVideo(uid) }
-        }
-
-        override fun onUserOffline(uid: Int, reason: Int) {
-            println("👋 Usuario se desconectó: $uid (razón: $reason)")
-            runOnUiThread { 
-                remoteSurfaceView?.visibility = View.GONE
-                Toast.makeText(this@VideoCallActivity, "El usuario se desconectó", Toast.LENGTH_SHORT).show()
-            }
-        }
-
-        override fun onJoinChannelSuccess(channel: String?, uid: Int, elapsed: Int) {
-            isJoined = true
-            println("🎉 ¡CONECTADO! Canal: $channel, UID: $uid")
-            runOnUiThread {
-                Toast.makeText(this@VideoCallActivity, "Conectado a la videollamada", Toast.LENGTH_SHORT).show()
-            }
-        }
-
-        override fun onError(err: Int) {
-            println("❌ ERROR RTC: $err")
-            val errorMessage = when (err) {
-                101 -> "Error 101: App ID inválido"
-                110 -> "Error 110: Token requerido. Cambia tu proyecto Agora a 'Testing Mode'"
-                2 -> "Error 2: Permisos de cámara/micrófono denegados"
-                else -> "Error RTC: $err"
-            }
-            runOnUiThread {
-                Toast.makeText(this@VideoCallActivity, errorMessage, Toast.LENGTH_LONG).show()
-            }
-        }
-
-        override fun onConnectionLost() {
-            println("📡 Conexión perdida")
-            runOnUiThread {
-                Toast.makeText(this@VideoCallActivity, "Conexión perdida", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-    private fun setupLocalVideo() {
-        localSurfaceView = RtcEngine.CreateRendererView(baseContext)
-        localSurfaceView?.setZOrderMediaOverlay(true)
-        localContainer.addView(localSurfaceView)
-        mRtcEngine?.setupLocalVideo(VideoCanvas(localSurfaceView, VideoCanvas.RENDER_MODE_HIDDEN, 0))
-    }
-
-    private fun setupRemoteVideo(uid: Int) {
-        remoteSurfaceView = RtcEngine.CreateRendererView(baseContext)
-        remoteContainer.addView(remoteSurfaceView)
-        mRtcEngine?.setupRemoteVideo(VideoCanvas(remoteSurfaceView, VideoCanvas.RENDER_MODE_HIDDEN, uid))
-        remoteSurfaceView?.visibility = View.VISIBLE
-    }
-
-    private fun joinChannel() {
-        val options = ChannelMediaOptions().apply {
-            channelProfile = Constants.CHANNEL_PROFILE_COMMUNICATION
-            clientRoleType = Constants.CLIENT_ROLE_BROADCASTER
-        }
-        
-        // En modo test, usar null para el token
-        val tokenToUse = if (token.isEmpty()) null else token
-        
-        println("🔐 Unirse al canal:")
-        println("   - Canal: $channelName")
-        println("   - Token: ${if (tokenToUse == null) "SIN TOKEN (modo test)" else "CON TOKEN"}")
-        println("   - UID: $uid")
-        
-        mRtcEngine?.joinChannel(tokenToUse, channelName, uid, options)
-    }
-
     private fun toggleMute() {
-        isMuted = !isMuted
-        mRtcEngine?.muteLocalAudioStream(isMuted)
-        muteButton.setImageResource(
-            if (isMuted) android.R.drawable.ic_lock_silent_mode
-            else android.R.drawable.ic_btn_speak_now
-        )
+        isMutedState.value = !isMutedState.value
+        mRtcEngine?.muteLocalAudioStream(isMutedState.value)
     }
 
     private fun toggleVideo() {
-        isVideoEnabled = !isVideoEnabled
-        mRtcEngine?.muteLocalVideoStream(!isVideoEnabled)
-        localSurfaceView?.visibility = if (isVideoEnabled) View.VISIBLE else View.GONE
-        videoButton.setImageResource(
-            if (isVideoEnabled) android.R.drawable.presence_video_online
-            else android.R.drawable.presence_video_away
-        )
+        isVideoEnabledState.value = !isVideoEnabledState.value
+        mRtcEngine?.muteLocalVideoStream(!isVideoEnabledState.value)
     }
 
     private fun leaveChannel() {
-        if (isJoined) {
-            mRtcEngine?.leaveChannel()
-            isJoined = false
-        }
+        mRtcEngine?.leaveChannel()
+        RtcEngine.destroy()
+        mRtcEngine = null
         finish()
+    }
+
+    private fun checkSelfPermission(): Boolean {
+        val permissions = arrayOf(Manifest.permission.RECORD_AUDIO, Manifest.permission.CAMERA)
+        return if (ContextCompat.checkSelfPermission(this, permissions[0]) != PackageManager.PERMISSION_GRANTED ||
+            ContextCompat.checkSelfPermission(this, permissions[1]) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, permissions, 22)
+            false
+        } else true
     }
 
     override fun onDestroy() {
         super.onDestroy()
         mRtcEngine?.leaveChannel()
         RtcEngine.destroy()
-        mRtcEngine = null
+    }
+}
+
+@Composable
+fun VideoCallScreen(
+    remoteUid: Int?,
+    isMuted: Boolean,
+    isVideoEnabled: Boolean,
+    onToggleMute: () -> Unit,
+    onToggleVideo: () -> Unit,
+    onEndCall: () -> Unit,
+    setupLocalVideo: (SurfaceView) -> Unit,
+    setupRemoteVideo: (SurfaceView, Int) -> Unit
+) {
+    val context = LocalContext.current
+
+    Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+        // Pantalla Remota (Fondo completo)
+        if (remoteUid != null) {
+            AndroidView(
+                factory = { ctx ->
+                    RtcEngine.CreateRendererView(ctx).apply { setupRemoteVideo(this, remoteUid) }
+                },
+                modifier = Modifier.fillMaxSize()
+            )
+        } else {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text("Esperando al otro usuario...", color = Color.Gray)
+            }
+        }
+
+        // Pantalla Local (Miniatura flotante)
+        Box(
+            modifier = Modifier
+                .padding(top = 40.dp, end = 16.dp)
+                .size(width = 120.dp, height = 180.dp)
+                .align(Alignment.TopEnd)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color.DarkGray)
+                .border(1.dp, Color.White.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
+        ) {
+            if (isVideoEnabled) {
+                AndroidView(
+                    factory = { ctx ->
+                        RtcEngine.CreateRendererView(ctx).apply { 
+                            setZOrderMediaOverlay(true)
+                            setupLocalVideo(this) 
+                        }
+                    },
+                    modifier = Modifier.fillMaxSize()
+                )
+            } else {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Icon(Icons.Default.VideocamOff, contentDescription = null, tint = Color.White)
+                }
+            }
+        }
+
+        // Controles Inferiores (Estilo moderno)
+        Surface(
+            modifier = Modifier
+                .padding(bottom = 32.dp)
+                .align(Alignment.BottomCenter)
+                .clip(RoundedCornerShape(32.dp)),
+            color = Color.Black.copy(alpha = 0.6f)
+        ) {
+            Row(
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(24.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                CallControlButton(
+                    icon = if (isMuted) Icons.Default.MicOff else Icons.Default.Mic,
+                    isActive = !isMuted,
+                    onClick = onToggleMute
+                )
+                
+                FloatingActionButton(
+                    onClick = onEndCall,
+                    containerColor = Color.Red,
+                    contentColor = Color.White,
+                    shape = CircleShape,
+                    modifier = Modifier.size(56.dp)
+                ) {
+                    Icon(Icons.Default.CallEnd, contentDescription = "Terminar")
+                }
+
+                CallControlButton(
+                    icon = if (isVideoEnabled) Icons.Default.Videocam else Icons.Default.VideocamOff,
+                    isActive = isVideoEnabled,
+                    onClick = onToggleVideo
+                )
+            }
+        }
+    }
+
+    BackHandler { onEndCall() }
+}
+
+@Composable
+fun CallControlButton(
+    icon: ImageVector,
+    isActive: Boolean,
+    onClick: () -> Unit
+) {
+    IconButton(
+        onClick = onClick,
+        modifier = Modifier
+            .size(48.dp)
+            .clip(CircleShape)
+            .background(if (isActive) Color.White.copy(alpha = 0.2f) else Color.Red.copy(alpha = 0.8f))
+    ) {
+        Icon(icon, contentDescription = null, tint = Color.White)
     }
 }

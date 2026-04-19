@@ -2,15 +2,22 @@
     <string name="app_name">Linkchat</string>
 
     <!-- General -->
+    <string name="welcome">¡Bienvenido!</string>
     <string name="signed_in_verified">Sesión iniciada (verificado)</string>
-    <string name="settings">Ajustes</string>
-    <string name="save">Guardar</string>
-    <string name="back">Volver</string>
+    <string name="settings">Configuración</string>
+    <string name="save_changes">Guardar Cambios</string>
+    <string name="back">Atrás</string>
     <string name="sign_out">Cerrar sesión</string>
     <string name="role">Rol</string>
     <string name="language">Idioma</string>
     <string name="spanish">Español</string>
     <string name="english">Inglés</string>
+    <string name="contacts_chat">Ver Contactos y Chat</string>
+    <string name="admin_panel">Panel de Administración</string>
+    <string name="app_language">Idioma de la aplicación</string>
+    <string name="online">En línea</string>
+    <string name="contacts_title">Contactos</string>
+    <string name="no_users_available">No hay usuarios disponibles aún</string>
 
     <!-- Auth -->
     <string name="login">Iniciar sesión</string>

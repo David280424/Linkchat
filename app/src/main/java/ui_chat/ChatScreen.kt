@@ -8,6 +8,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
@@ -39,12 +40,22 @@ fun ChatScreen(
     var selectedMessageForOptions by remember { mutableStateOf<Message?>(null) }
     var showForwardDialog by remember { mutableStateOf(false) }
 
+    // Scroll control
+    val listState = rememberLazyListState()
+
     DisposableEffect(contact.uid) {
         val reg = ChatManager.listenForMessages(contact.uid) { newList ->
             messages.clear()
             messages.addAll(newList)
         }
         onDispose { reg.remove() }
+    }
+
+    // Auto-scroll to bottom when new messages arrive
+    LaunchedEffect(messages.size) {
+        if (messages.isNotEmpty()) {
+            listState.animateScrollToItem(messages.size - 1)
+        }
     }
 
     fun startVideoCall() {
@@ -84,9 +95,11 @@ fun ChatScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .imePadding() // CRUCIAL: Ajusta la UI cuando sale el teclado
                 .background(Color(0xFFF0F2F5))
         ) {
             LazyColumn(
+                state = listState, // Vinculado al control de scroll
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
@@ -145,7 +158,8 @@ fun ChatScreen(
                         modifier = Modifier.size(48.dp),
                         shape = RoundedCornerShape(24.dp),
                         containerColor = Color(0xFF673AB7),
-                        contentColor = Color.White
+                        contentColor = Color.White,
+                        elevation = FloatingActionButtonDefaults.elevation(0.dp)
                     ) {
                         Icon(Icons.Default.Send, contentDescription = "Enviar", modifier = Modifier.size(20.dp))
                     }
@@ -154,13 +168,12 @@ fun ChatScreen(
         }
     }
 
+    // DIÁLOGOS DE OPCIONES
     if (selectedMessageForOptions != null) {
         AlertDialog(
             onDismissRequest = { selectedMessageForOptions = null },
             confirmButton = {
-                TextButton(onClick = { 
-                    showForwardDialog = true
-                }) { 
+                TextButton(onClick = { showForwardDialog = true }) {
                     Text("REENVIAR", fontWeight = FontWeight.Bold) 
                 }
             },

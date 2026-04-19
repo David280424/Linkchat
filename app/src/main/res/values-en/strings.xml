@@ -2,15 +2,22 @@
     <string name="app_name">Linkchat</string>
 
     <!-- General -->
+    <string name="welcome">Welcome!</string>
     <string name="signed_in_verified">Signed in (verified)</string>
     <string name="settings">Settings</string>
-    <string name="save">Save</string>
+    <string name="save_changes">Save Changes</string>
     <string name="back">Back</string>
     <string name="sign_out">Sign out</string>
     <string name="role">Role</string>
     <string name="language">Language</string>
     <string name="spanish">Spanish</string>
     <string name="english">English</string>
+    <string name="contacts_chat">View Contacts and Chat</string>
+    <string name="admin_panel">Admin Panel</string>
+    <string name="app_language">App Language</string>
+    <string name="online">Online</string>
+    <string name="contacts_title">Contacts</string>
+    <string name="no_users_available">No users available yet</string>
 
     <!-- Auth -->
     <string name="login">Login</string>

@@ -11,8 +11,9 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import com.example.textmemail.models.Message
+import com.example.textmemail.R
 import com.example.textmemail.models.Contact
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -25,12 +26,12 @@ fun ContactsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Contactos") },
+                title = { Text(stringResource(R.string.contacts_title)) },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Volver"
+                            contentDescription = stringResource(R.string.back)
                         )
                     }
                 }
@@ -45,7 +46,7 @@ fun ContactsScreen(
         ) {
             if (contacts.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("No hay usuarios disponibles aún")
+                    Text(stringResource(R.string.no_users_available))
                 }
             } else {
                 LazyColumn(

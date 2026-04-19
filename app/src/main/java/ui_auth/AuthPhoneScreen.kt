@@ -13,7 +13,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -24,7 +23,7 @@ import androidx.compose.ui.unit.sp
 
 @Composable
 fun AuthPhoneScreen(
-    onSendCode: (String) -> Unit,
+    onSendCode: (String, (Boolean, String?) -> Unit) -> Unit, // Añadido callback de éxito/error
     onVerifyCode: (String, String, String, (Boolean, String) -> Unit) -> Unit,
     onQuickAdminLogin: (done: (Boolean, String) -> Unit) -> Unit,
     onLanguageChanged: (String) -> Unit = {}
@@ -53,7 +52,6 @@ fun AuthPhoneScreen(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
-            // Card Principal
             Card(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -99,11 +97,7 @@ fun AuthPhoneScreen(
                             singleLine = true,
                             shape = RoundedCornerShape(12.dp),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = Color(0xFF6200EE),
-                                focusedLabelColor = Color(0xFF6200EE)
-                            )
+                            modifier = Modifier.fillMaxWidth()
                         )
                     } else {
                         OutlinedTextField(
@@ -117,23 +111,12 @@ fun AuthPhoneScreen(
                         
                         Spacer(Modifier.height(12.dp))
                         
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
+                        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             Text("Idioma:", style = MaterialTheme.typography.bodySmall)
                             Spacer(Modifier.width(8.dp))
-                            FilterChip(
-                                selected = language == "es",
-                                onClick = { language = "es"; onLanguageChanged("es") },
-                                label = { Text("ES") }
-                            )
+                            FilterChip(selected = language == "es", onClick = { language = "es"; onLanguageChanged("es") }, label = { Text("ES") })
                             Spacer(Modifier.width(8.dp))
-                            FilterChip(
-                                selected = language == "en",
-                                onClick = { language = "en"; onLanguageChanged("en") },
-                                label = { Text("EN") }
-                            )
+                            FilterChip(selected = language == "en", onClick = { language = "en"; onLanguageChanged("en") }, label = { Text("EN") })
                         }
 
                         Spacer(Modifier.height(12.dp))
@@ -161,9 +144,15 @@ fun AuthPhoneScreen(
                                     message = msg
                                 }
                             } else if (step == 1) {
-                                onSendCode(phoneNumber)
-                                step = 2
-                                isLoading = false
+                                // Lógica mejorada: Solo cambiar de paso si el envío fue OK
+                                onSendCode(phoneNumber) { success, errorMsg ->
+                                    isLoading = false
+                                    if (success) {
+                                        step = 2
+                                    } else {
+                                        message = errorMsg ?: "Error desconocido al enviar SMS"
+                                    }
+                                }
                             } else {
                                 onVerifyCode(verificationCode, name, language) { ok, msg ->
                                     isLoading = false
@@ -193,7 +182,7 @@ fun AuthPhoneScreen(
 
             message?.let {
                 Spacer(Modifier.height(16.dp))
-                Text(it, color = Color.White, textAlign = TextAlign.Center, fontWeight = FontWeight.Medium)
+                Text(it, color = Color.White, textAlign = TextAlign.Center, fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 16.dp))
             }
             
             if (step == 1) {
