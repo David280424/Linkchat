@@ -4,7 +4,10 @@ package com.example.textmemail.models
 data class Contact(
     val uid: String = "",
     val name: String = "",
-    val email: String = ""
+    val email: String = "",
+    val phone: String = "",
+    val isOnline: Boolean = false,
+    val lastSeen: Long = 0L
 )
 
 /**
@@ -15,5 +18,6 @@ data class Message(
     val senderId: String = "",    // uid del remitente
     val receiverId: String = "",  // uid del destinatario
     val text: String = "",        // contenido
-    val timestamp: Long = 0L      // System.currentTimeMillis()
+    val timestamp: Long = 0L,     // System.currentTimeMillis()
+    val isRead: Boolean = false   // Estado de lectura
 )

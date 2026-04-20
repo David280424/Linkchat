@@ -16,8 +16,17 @@
     <string name="admin_panel">Admin Panel</string>
     <string name="app_language">App Language</string>
     <string name="online">Online</string>
+    <string name="offline">Offline</string>
     <string name="contacts_title">Contacts</string>
     <string name="no_users_available">No users available yet</string>
+    <string name="type_message">Type a message...</string>
+    <string name="send">Send</string>
+    <string name="forward">FORWARD</string>
+    <string name="delete">DELETE</string>
+    <string name="cancel">CANCEL</string>
+    <string name="message_options">Message options</string>
+    <string name="forward_to">Forward to...</string>
+    <string name="message_forwarded">Message forwarded</string>
 
     <!-- Auth -->
     <string name="login">Login</string>

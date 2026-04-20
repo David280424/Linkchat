@@ -16,8 +16,17 @@
     <string name="admin_panel">Panel de Administración</string>
     <string name="app_language">Idioma de la aplicación</string>
     <string name="online">En línea</string>
+    <string name="offline">Desconectado</string>
     <string name="contacts_title">Contactos</string>
     <string name="no_users_available">No hay usuarios disponibles aún</string>
+    <string name="type_message">Escribe un mensaje...</string>
+    <string name="send">Enviar</string>
+    <string name="forward">REENVIAR</string>
+    <string name="delete">ELIMINAR</string>
+    <string name="cancel">CANCELAR</string>
+    <string name="message_options">Opciones del mensaje</string>
+    <string name="forward_to">Reenviar a...</string>
+    <string name="message_forwarded">Mensaje reenviado</string>
 
     <!-- Auth -->
     <string name="login">Iniciar sesión</string>

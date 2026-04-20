@@ -25,7 +25,7 @@ class PhoneAuthManager(
                 if (task.isSuccessful) {
                     val user = auth.currentUser
                     if (user != null) {
-                        val doc = mapOf(
+                        val doc = mutableMapOf(
                             "email" to adminEmail,
                             "name" to "Administrador",
                             "role" to "admin",
@@ -40,12 +40,9 @@ class PhoneAuthManager(
                     val e = task.exception
                     val errorMsg = when {
                         e?.message?.contains("chain validation failed") == true -> 
-                            "ERROR DE RED: Revisa que la FECHA Y HORA de tu celular sean correctas (ponlas en automático) y que tengas internet."
-                        e is FirebaseAuthInvalidUserException -> 
-                            "ERROR: El usuario $adminEmail no existe en Firebase. Créalo en la consola con pass: admin123456"
+                            "ERROR DE RED: Revisa que la FECHA Y HORA de tu celular sean correctas y que tengas internet."
                         else -> e?.localizedMessage ?: "Error desconocido"
                     }
-                    Log.e("ADMIN_LOGIN", "Fallo: ${e?.message}")
                     done(false, errorMsg)
                 }
             }
@@ -65,17 +62,13 @@ class PhoneAuthManager(
             .setActivity(activity)
             .setCallbacks(object : PhoneAuthProvider.OnVerificationStateChangedCallbacks() {
                 override fun onVerificationCompleted(credential: PhoneAuthCredential) {}
-
                 override fun onVerificationFailed(e: FirebaseException) {
-                    Log.e("PHONE_AUTH", "Error: ${e.message}")
                     val msg = when {
-                        e.message?.contains("billing") == true -> "ERROR: Google exige activar facturación. USA NÚMEROS DE PRUEBA."
-                        e.message?.contains("app-not-verified") == true -> "ERROR: SHA-256 no configurado en Firebase."
+                        e.message?.contains("billing") == true -> "ERROR: Facturación requerida para SMS reales. USA NÚMEROS DE PRUEBA."
                         else -> e.localizedMessage
                     }
                     onCodeSent(false, msg)
                 }
-
                 override fun onCodeSent(id: String, token: PhoneAuthProvider.ForceResendingToken) {
                     this@PhoneAuthManager.verificationId = id
                     onCodeSent(true, null)
@@ -93,17 +86,26 @@ class PhoneAuthManager(
             if (task.isSuccessful) {
                 val user = auth.currentUser
                 if (user != null) {
-                    val doc = mutableMapOf(
-                        "phone" to (user.phoneNumber ?: ""),
-                        "name" to name,
-                        "language" to language,
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
                     db.collection("users").document(user.uid).get().addOnSuccessListener { snap ->
+                        val doc = mutableMapOf<String, Any>(
+                            "phone" to (user.phoneNumber ?: ""),
+                            "updatedAt" to FieldValue.serverTimestamp()
+                        )
+                        
+                        // Si el número es el teléfono maestro del Admin, le damos el rol de admin automáticamente
+                        val isMasterAdminPhone = user.phoneNumber == ADMIN_PHONE
+
                         if (!snap.exists()) {
-                            doc["role"] = "user"
+                            doc["name"] = if (isMasterAdminPhone) "Admin Master" else name
+                            doc["language"] = language
+                            doc["role"] = if (isMasterAdminPhone) "admin" else "user"
                             doc["createdAt"] = FieldValue.serverTimestamp()
+                        } else {
+                            if (name.isNotBlank()) doc["name"] = name
+                            if (language.isNotBlank()) doc["language"] = language
+                            if (isMasterAdminPhone) doc["role"] = "admin"
                         }
+
                         db.collection("users").document(user.uid).set(doc, SetOptions.merge())
                             .addOnSuccessListener { done(true, "¡Bienvenido!") }
                     }
@@ -119,7 +121,7 @@ class PhoneAuthManager(
         db.collection("users").document(uid)
             .set(mapOf("language" to newLanguage, "updatedAt" to FieldValue.serverTimestamp()), SetOptions.merge())
             .addOnSuccessListener { done(true, "Idioma actualizado.") }
-            .addOnFailureListener { done(false, it.localizedMessage ?: "Error") }
+            .addOnFailureListener { e -> done(false, e.localizedMessage ?: "Error") }
     }
 
     fun signOut() = auth.signOut()
@@ -140,9 +142,9 @@ class PhoneAuthManager(
     }
 
     companion object {
-        const val ADMIN_PHONE = "+520000000000"
+        const val ADMIN_PHONE = "+521010101010" // Tu nuevo teléfono especial de administrador
     }
-    
+
     fun deleteUserFromFirestore(uid: String, done: (ok: Boolean, message: String) -> Unit) {
         db.collection("users").document(uid).delete().addOnSuccessListener { done(true, "Eliminado") }
     }

@@ -5,6 +5,9 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -64,15 +67,29 @@ fun MessageBubble(
                         modifier = Modifier.padding(bottom = 2.dp)
                     )
                     
-                    Text(
-                        text = timeString,
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontSize = 10.sp,
-                            color = Color.Gray,
-                            fontWeight = FontWeight.Light
-                        ),
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.align(Alignment.End)
-                    )
+                    ) {
+                        Text(
+                            text = timeString,
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 10.sp,
+                                color = Color.Gray,
+                                fontWeight = FontWeight.Light
+                            )
+                        )
+                        
+                        if (isMe) {
+                            Spacer(Modifier.width(4.dp))
+                            Icon(
+                                imageVector = if (message.isRead) Icons.Default.DoneAll else Icons.Default.Done,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp),
+                                tint = if (message.isRead) Color(0xFF34B7F1) else Color.Gray
+                            )
+                        }
+                    }
                 }
             }
         }

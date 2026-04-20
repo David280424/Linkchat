@@ -56,6 +56,16 @@ private fun setAppLocale(activity: ComponentActivity, langTag: String) {
     activity.resources.updateConfiguration(cfg, activity.resources.displayMetrics)
 }
 
+// Estados de navegación robustos
+sealed class NavDestination {
+    object Auth : NavDestination()
+    object Home : NavDestination()
+    object Admin : NavDestination()
+    object Settings : NavDestination()
+    object Contacts : NavDestination()
+    data class Chat(val contact: Contact) : NavDestination()
+}
+
 class MainActivity : ComponentActivity() {
 
     private val auth by lazy { FirebaseAuth.getInstance() }
@@ -78,6 +88,7 @@ class MainActivity : ComponentActivity() {
 
             val db = FirebaseFirestore.getInstance()
 
+            // BackHandler global para una navegación segura
             BackHandler(enabled = isLoggedIn && (selectedContact != null || showContacts || showAdmin || showSettings)) {
                 if (selectedContact != null) {
                     selectedContact = null
@@ -133,7 +144,12 @@ class MainActivity : ComponentActivity() {
                                 val name = doc.getString("name") ?: ""
                                 val displayId = phone ?: email
                                 if (!displayId.isNullOrBlank()) {
-                                    Contact(uid = doc.id, name = name, email = displayId)
+                                    Contact(
+                                        uid = doc.id, 
+                                        name = name, 
+                                        email = displayId,
+                                        isOnline = doc.getBoolean("isOnline") ?: false
+                                    )
                                 } else null
                             }
                         }
@@ -149,26 +165,26 @@ class MainActivity : ComponentActivity() {
                 )
             ) {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    val navigationState = when {
-                        !isLoggedIn -> "auth"
-                        showAdmin -> "admin"
-                        showSettings -> "settings"
-                        selectedContact != null -> "chat"
-                        showContacts -> "contacts"
-                        else -> "home"
+                    // Cálculo de destino de navegación
+                    val navDestination = when {
+                        !isLoggedIn -> NavDestination.Auth
+                        selectedContact != null -> NavDestination.Chat(selectedContact!!)
+                        showAdmin -> NavDestination.Admin
+                        showSettings -> NavDestination.Settings
+                        showContacts -> NavDestination.Contacts
+                        else -> NavDestination.Home
                     }
 
                     AnimatedContent(
-                        targetState = navigationState,
+                        targetState = navDestination,
                         transitionSpec = {
                             fadeIn(animationSpec = tween(300)) togetherWith fadeOut(animationSpec = tween(300))
                         },
-                        label = "MainNavigation"
+                        label = "MainAppNavigation"
                     ) { state ->
                         when (state) {
-                            "auth" -> AuthPhoneScreen(
+                            is NavDestination.Auth -> AuthPhoneScreen(
                                 onSendCode = { phone, callback ->
-                                    // CORREGIDO: Coincide con PhoneAuthManager.sendVerificationCode(activity, phone, callback)
                                     phoneAuth.sendVerificationCode(this@MainActivity, phone) { success, errorMsg ->
                                         if (success) {
                                             Toast.makeText(this@MainActivity, "Código enviado", Toast.LENGTH_SHORT).show()
@@ -190,12 +206,12 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onLanguageChanged = { lang -> applyLanguage(lang, recreate = false) }
                             )
-                            "admin" -> AdminScreen(
+                            is NavDestination.Admin -> AdminScreen(
                                 users = contacts,
                                 onDeleteUser = { contact, cb -> phoneAuth.deleteUserFromFirestore(contact.uid, cb) },
                                 onBack = { showAdmin = false }
                             )
-                            "settings" -> SettingsScreen(
+                            is NavDestination.Settings -> SettingsScreen(
                                 currentLanguage = currentLanguage,
                                 onSave = { lang ->
                                     phoneAuth.updateLanguage(lang) { _, _ -> }
@@ -203,22 +219,17 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onClose = { showSettings = false }
                             )
-                            "contacts" -> ContactsScreen(
+                            is NavDestination.Contacts -> ContactsScreen(
                                 contacts = contacts,
                                 onBack = { showContacts = false },
                                 onOpenChat = { contact -> selectedContact = contact }
                             )
-                            "chat" -> {
-                                val chatTarget = remember { selectedContact }
-                                if (chatTarget != null) {
-                                    ChatScreen(
-                                        contact = chatTarget,
-                                        allContacts = contacts,
-                                        onBack = { selectedContact = null }
-                                    )
-                                }
-                            }
-                            else -> HomeScreen(
+                            is NavDestination.Chat -> ChatScreen(
+                                contact = state.contact,
+                                allContacts = contacts,
+                                onBack = { selectedContact = null }
+                            )
+                            is NavDestination.Home -> HomeScreen(
                                 identifier = currentIdentifier,
                                 role = currentRole,
                                 onOpenSettings = { showSettings = true },

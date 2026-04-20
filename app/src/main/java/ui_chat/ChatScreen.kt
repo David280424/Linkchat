@@ -18,10 +18,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.google.firebase.auth.FirebaseAuth
 import auth.ChatManager
+import com.example.textmemail.R
 import com.example.textmemail.VideoCallActivity
 import com.example.textmemail.models.Contact
 import com.example.textmemail.models.Message
@@ -39,8 +41,6 @@ fun ChatScreen(
     
     var selectedMessageForOptions by remember { mutableStateOf<Message?>(null) }
     var showForwardDialog by remember { mutableStateOf(false) }
-
-    // Scroll control
     val listState = rememberLazyListState()
 
     DisposableEffect(contact.uid) {
@@ -51,7 +51,6 @@ fun ChatScreen(
         onDispose { reg.remove() }
     }
 
-    // Auto-scroll to bottom when new messages arrive
     LaunchedEffect(messages.size) {
         if (messages.isNotEmpty()) {
             listState.animateScrollToItem(messages.size - 1)
@@ -73,18 +72,22 @@ fun ChatScreen(
             TopAppBar(
                 title = { 
                     Column {
-                        Text(contact.name.ifBlank { "Usuario" }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
-                        Text("En línea", style = MaterialTheme.typography.labelSmall, color = Color(0xFF00BFA5))
+                        Text(contact.name.ifBlank { contact.email }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text(
+                            text = if (contact.isOnline) stringResource(R.string.online) else stringResource(R.string.offline),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (contact.isOnline) Color(0xFF00BFA5) else Color.Gray
+                        )
                     }
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Volver")
+                        Icon(Icons.Default.ArrowBack, contentDescription = stringResource(R.string.back))
                     }
                 },
                 actions = {
                     IconButton(onClick = { startVideoCall() }) {
-                        Icon(Icons.Default.Videocam, contentDescription = "Videollamada")
+                        Icon(Icons.Default.Videocam, contentDescription = "Videocall")
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White)
@@ -95,11 +98,11 @@ fun ChatScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .imePadding() // CRUCIAL: Ajusta la UI cuando sale el teclado
+                .imePadding()
                 .background(Color(0xFFF0F2F5))
         ) {
             LazyColumn(
-                state = listState, // Vinculado al control de scroll
+                state = listState,
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
@@ -116,25 +119,16 @@ fun ChatScreen(
                 }
             }
 
-            Surface(
-                tonalElevation = 8.dp,
-                shadowElevation = 8.dp,
-                color = Color.White
-            ) {
+            Surface(tonalElevation = 8.dp, color = Color.White) {
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 8.dp, vertical = 8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    IconButton(onClick = { /* Adjuntar */ }) {
-                        Icon(Icons.Default.Add, contentDescription = null, tint = Color.Gray)
-                    }
-                    
+                    IconButton(onClick = { }) { Icon(Icons.Default.Add, contentDescription = null, tint = Color.Gray) }
                     TextField(
                         value = input,
                         onValueChange = { input = it },
-                        placeholder = { Text("Escribe un mensaje...") },
+                        placeholder = { Text(stringResource(R.string.type_message)) },
                         modifier = Modifier.weight(1f),
                         shape = RoundedCornerShape(24.dp),
                         colors = TextFieldDefaults.colors(
@@ -144,9 +138,7 @@ fun ChatScreen(
                             unfocusedContainerColor = Color(0xFFF0F2F5)
                         )
                     )
-                    
                     Spacer(Modifier.width(8.dp))
-                    
                     FloatingActionButton(
                         onClick = {
                             val text = input.trim()
@@ -160,9 +152,7 @@ fun ChatScreen(
                         containerColor = Color(0xFF673AB7),
                         contentColor = Color.White,
                         elevation = FloatingActionButtonDefaults.elevation(0.dp)
-                    ) {
-                        Icon(Icons.Default.Send, contentDescription = "Enviar", modifier = Modifier.size(20.dp))
-                    }
+                    ) { Icon(Icons.Default.Send, contentDescription = stringResource(R.string.send), modifier = Modifier.size(20.dp)) }
                 }
             }
         }
@@ -173,8 +163,8 @@ fun ChatScreen(
         AlertDialog(
             onDismissRequest = { selectedMessageForOptions = null },
             confirmButton = {
-                TextButton(onClick = { showForwardDialog = true }) {
-                    Text("REENVIAR", fontWeight = FontWeight.Bold) 
+                TextButton(onClick = { showForwardDialog = true }) { 
+                    Text(stringResource(R.string.forward), fontWeight = FontWeight.Bold) 
                 }
             },
             dismissButton = {
@@ -182,38 +172,37 @@ fun ChatScreen(
                 Row {
                     if (isMe) {
                         TextButton(onClick = {
-                            val msgId = selectedMessageForOptions?.id ?: ""
-                            if (msgId.isNotEmpty()) {
-                                ChatManager.deleteMessage(contact.uid, msgId) { _, _ -> }
-                            }
+                            ChatManager.deleteMessage(contact.uid, selectedMessageForOptions!!.id) { _, _ -> }
                             selectedMessageForOptions = null
-                        }) { Text("ELIMINAR", color = Color.Red, fontWeight = FontWeight.Bold) }
+                        }) { Text(stringResource(R.string.delete), color = Color.Red, fontWeight = FontWeight.Bold) }
                     }
-                    TextButton(onClick = { selectedMessageForOptions = null }) { Text("CANCELAR") }
+                    TextButton(onClick = { selectedMessageForOptions = null }) { Text(stringResource(R.string.cancel)) }
                 }
             },
-            title = { Text("Opciones del mensaje") },
+            title = { Text(stringResource(R.string.message_options)) },
             text = { Text(selectedMessageForOptions?.text ?: "") }
         )
     }
 
     if (showForwardDialog && selectedMessageForOptions != null) {
+        // CORRECCIÓN: Obtenemos el texto fuera del onClick
+        val forwardLabel = context.getString(R.string.message_forwarded)
         AlertDialog(
             onDismissRequest = { 
                 showForwardDialog = false
                 selectedMessageForOptions = null
             },
-            title = { Text("Reenviar a...") },
+            title = { Text(stringResource(R.string.forward_to)) },
             text = {
                 LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
                     items(allContacts) { c ->
                         ListItem(
                             headlineContent = { Text(c.name.ifBlank { c.email }) },
                             modifier = Modifier.clickable {
-                                ChatManager.sendMessage(c.uid, "[Reenviado]: ${selectedMessageForOptions!!.text}") { _, _ -> }
+                                ChatManager.sendMessage(c.uid, "[$forwardLabel]: ${selectedMessageForOptions?.text ?: ""}") { _, _ -> }
                                 showForwardDialog = false
                                 selectedMessageForOptions = null
-                                Toast.makeText(context, "Mensaje reenviado", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, forwardLabel, Toast.LENGTH_SHORT).show()
                             }
                         )
                     }
@@ -223,7 +212,7 @@ fun ChatScreen(
                 TextButton(onClick = { 
                     showForwardDialog = false
                     selectedMessageForOptions = null
-                }) { Text("CANCELAR") }
+                }) { Text(stringResource(R.string.cancel)) }
             }
         )
     }

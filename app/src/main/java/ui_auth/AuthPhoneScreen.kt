@@ -1,11 +1,13 @@
 package com.example.textmemail.ui_auth
 
+import android.util.Log
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Message
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.*
@@ -20,10 +22,12 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.google.firebase.firestore.FirebaseFirestore
+import kotlinx.coroutines.delay
 
 @Composable
 fun AuthPhoneScreen(
-    onSendCode: (String, (Boolean, String?) -> Unit) -> Unit, // Añadido callback de éxito/error
+    onSendCode: (String, (Boolean, String?) -> Unit) -> Unit,
     onVerifyCode: (String, String, String, (Boolean, String) -> Unit) -> Unit,
     onQuickAdminLogin: (done: (Boolean, String) -> Unit) -> Unit,
     onLanguageChanged: (String) -> Unit = {}
@@ -36,15 +40,20 @@ fun AuthPhoneScreen(
     var message by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
 
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(
-                brush = Brush.verticalGradient(
-                    colors = listOf(Color(0xFF6200EE), Color(0xFF3700B3))
+    var showFakeNotification by remember { mutableStateOf(false) }
+    var codeFromDB by remember { mutableStateOf("") }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    brush = Brush.verticalGradient(
+                        colors = listOf(Color(0xFF6200EE), Color(0xFF3700B3))
+                    )
                 )
-            )
-    ) {
+        )
+
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -93,7 +102,7 @@ fun AuthPhoneScreen(
                             value = phoneNumber,
                             onValueChange = { phoneNumber = it },
                             label = { Text("Teléfono o 'admin'") },
-                            placeholder = { Text("+34 000 000 000") },
+                            placeholder = { Text("+52 811 490 6150") },
                             singleLine = true,
                             shape = RoundedCornerShape(12.dp),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
@@ -139,20 +148,42 @@ fun AuthPhoneScreen(
                             isLoading = true
                             message = null
                             if (step == 1 && phoneNumber.lowercase().trim() == "admin") {
-                                onQuickAdminLogin { ok, msg ->
-                                    isLoading = false
-                                    message = msg
-                                }
+                                onQuickAdminLogin { ok, msg -> isLoading = false; message = msg }
                             } else if (step == 1) {
-                                // Lógica mejorada: Solo cambiar de paso si el envío fue OK
-                                onSendCode(phoneNumber) { success, errorMsg ->
-                                    isLoading = false
-                                    if (success) {
-                                        step = 2
-                                    } else {
-                                        message = errorMsg ?: "Error desconocido al enviar SMS"
+                                val digitsOnly = phoneNumber.filter { it.isDigit() }
+                                val finalPhone = if (digitsOnly.startsWith("52")) "+$digitsOnly" else "+52$digitsOnly"
+                                
+                                FirebaseFirestore.getInstance().collection("test_codes").document(finalPhone)
+                                    .get().addOnSuccessListener { doc ->
+                                        if (doc.exists()) {
+                                            codeFromDB = doc.getString("code") ?: "123456"
+                                        } else {
+                                            codeFromDB = "123456"
+                                        }
+                                        
+                                        onSendCode(phoneNumber) { success, errorMsg ->
+                                            isLoading = false
+                                            if (success) {
+                                                step = 2
+                                                showFakeNotification = true
+                                                // AUTO-COMPLETAR EL CÓDIGO
+                                                verificationCode = codeFromDB
+                                            } else {
+                                                message = errorMsg
+                                            }
+                                        }
+                                    }.addOnFailureListener {
+                                        codeFromDB = "123456"
+                                        onSendCode(phoneNumber) { success, errorMsg ->
+                                            isLoading = false
+                                            if (success) { 
+                                                step = 2
+                                                showFakeNotification = true
+                                                verificationCode = codeFromDB
+                                            } 
+                                            else { message = errorMsg }
+                                        }
                                     }
-                                }
                             } else {
                                 onVerifyCode(verificationCode, name, language) { ok, msg ->
                                     isLoading = false
@@ -173,7 +204,7 @@ fun AuthPhoneScreen(
                     }
 
                     if (step == 2) {
-                        TextButton(onClick = { step = 1; message = null }) {
+                        TextButton(onClick = { step = 1; message = null; showFakeNotification = false; verificationCode = "" }) {
                             Text("Cambiar número", color = Color(0xFF6200EE))
                         }
                     }
@@ -182,18 +213,39 @@ fun AuthPhoneScreen(
 
             message?.let {
                 Spacer(Modifier.height(16.dp))
-                Text(it, color = Color.White, textAlign = TextAlign.Center, fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 16.dp))
+                Text(it, color = Color.White, textAlign = TextAlign.Center, fontWeight = FontWeight.Medium)
+            }
+        }
+
+        AnimatedVisibility(
+            visible = showFakeNotification,
+            enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
+            modifier = Modifier.align(Alignment.TopCenter).padding(top = 40.dp, start = 16.dp, end = 16.dp)
+        ) {
+            Surface(
+                color = Color.White,
+                shape = RoundedCornerShape(16.dp),
+                shadowElevation = 10.dp,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.AutoMirrored.Filled.Message, contentDescription = null, tint = Color(0xFF6200EE))
+                    Spacer(Modifier.width(12.dp))
+                    Column {
+                        Text("SMS", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                        Text("Tu código de verificación es: $codeFromDB", fontSize = 14.sp)
+                    }
+                }
             }
             
-            if (step == 1) {
-                TextButton(
-                    onClick = { 
-                        isLoading = true
-                        onQuickAdminLogin { _, msg -> isLoading = false; message = msg }
-                    },
-                    modifier = Modifier.padding(top = 16.dp).alpha(0.6f)
-                ) {
-                    Text("Acceso Rápido Admin", color = Color.White)
+            LaunchedEffect(showFakeNotification) {
+                if (showFakeNotification) {
+                    delay(5000)
+                    showFakeNotification = false
                 }
             }
         }
