@@ -29,7 +29,8 @@ class PhoneAuthManager(
                             "email" to adminEmail,
                             "name" to "Administrador",
                             "role" to "admin",
-                            "updatedAt" to FieldValue.serverTimestamp()
+                            "updatedAt" to FieldValue.serverTimestamp(),
+                            "isOnline" to true
                         )
                         db.collection("users").document(user.uid)
                             .set(doc, SetOptions.merge())
@@ -43,9 +44,19 @@ class PhoneAuthManager(
                             "ERROR DE RED: Revisa que la FECHA Y HORA de tu celular sean correctas y que tengas internet."
                         else -> e?.localizedMessage ?: "Error desconocido"
                     }
+                    Log.e("ADMIN_LOGIN", "Fallo: ${e?.message}")
                     done(false, errorMsg)
                 }
             }
+    }
+
+    /** Actualiza el estado online/offline del usuario */
+    fun setUserOnlineStatus(isOnline: Boolean) {
+        val uid = auth.currentUser?.uid ?: return
+        db.collection("users").document(uid).update(
+            "isOnline", isOnline,
+            "lastSeen", FieldValue.serverTimestamp()
+        )
     }
 
     /** Envía el código de verificación al teléfono */
@@ -89,21 +100,18 @@ class PhoneAuthManager(
                     db.collection("users").document(user.uid).get().addOnSuccessListener { snap ->
                         val doc = mutableMapOf<String, Any>(
                             "phone" to (user.phoneNumber ?: ""),
-                            "updatedAt" to FieldValue.serverTimestamp()
+                            "updatedAt" to FieldValue.serverTimestamp(),
+                            "isOnline" to true
                         )
                         
-                        // Si el número es el teléfono maestro del Admin, le damos el rol de admin automáticamente
-                        val isMasterAdminPhone = user.phoneNumber == ADMIN_PHONE
-
                         if (!snap.exists()) {
-                            doc["name"] = if (isMasterAdminPhone) "Admin Master" else name
+                            doc["name"] = name
                             doc["language"] = language
-                            doc["role"] = if (isMasterAdminPhone) "admin" else "user"
+                            doc["role"] = "user"
                             doc["createdAt"] = FieldValue.serverTimestamp()
                         } else {
                             if (name.isNotBlank()) doc["name"] = name
                             if (language.isNotBlank()) doc["language"] = language
-                            if (isMasterAdminPhone) doc["role"] = "admin"
                         }
 
                         db.collection("users").document(user.uid).set(doc, SetOptions.merge())
@@ -124,7 +132,10 @@ class PhoneAuthManager(
             .addOnFailureListener { e -> done(false, e.localizedMessage ?: "Error") }
     }
 
-    fun signOut() = auth.signOut()
+    fun signOut() {
+        setUserOnlineStatus(false)
+        auth.signOut()
+    }
 
     fun getCurrentUserRole(done: (ok: Boolean, role: String?, message: String) -> Unit) {
         val uid = auth.currentUser?.uid ?: return done(false, null, "No hay sesión.")
@@ -142,7 +153,7 @@ class PhoneAuthManager(
     }
 
     companion object {
-        const val ADMIN_PHONE = "+521010101010" // Tu nuevo teléfono especial de administrador
+        const val ADMIN_PHONE = "+521010101010"
     }
 
     fun deleteUserFromFirestore(uid: String, done: (ok: Boolean, message: String) -> Unit) {

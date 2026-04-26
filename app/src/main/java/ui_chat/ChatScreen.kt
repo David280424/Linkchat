@@ -43,12 +43,32 @@ fun ChatScreen(
     var showForwardDialog by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
+    // Estado para la llamada entrante
+    var incomingCallChannel by remember { mutableStateOf<String?>(null) }
+
     DisposableEffect(contact.uid) {
-        val reg = ChatManager.listenForMessages(contact.uid) { newList ->
+        val regMessages = ChatManager.listenForMessages(contact.uid) { newList ->
             messages.clear()
             messages.addAll(newList)
         }
-        onDispose { reg.remove() }
+        
+        // Escuchar señales de llamada
+        val regInfo = ChatManager.listenForChatInfo(contact.uid) { data ->
+            val activeCall = data?.get("activeCall") as? Map<*, *>
+            val callerId = activeCall?.get("callerId") as? String
+            val channel = activeCall?.get("channelName") as? String
+            
+            if (callerId != null && callerId != FirebaseAuth.getInstance().currentUser?.uid) {
+                incomingCallChannel = channel
+            } else {
+                incomingCallChannel = null
+            }
+        }
+
+        onDispose {
+            regMessages.remove()
+            regInfo.remove()
+        }
     }
 
     LaunchedEffect(messages.size) {
@@ -60,6 +80,10 @@ fun ChatScreen(
     fun startVideoCall() {
         val currentUserUid = FirebaseAuth.getInstance().currentUser?.uid ?: return
         val channelName = if (currentUserUid <= contact.uid) "${currentUserUid}_${contact.uid}" else "${contact.uid}_${currentUserUid}"
+        
+        // Enviamos la señal a Firestore
+        ChatManager.startCallSignal(contact.uid, channelName)
+        
         val intent = Intent(context, VideoCallActivity::class.java).apply {
             putExtra("CHANNEL_NAME", channelName)
             putExtra("TOKEN", "")
@@ -158,7 +182,34 @@ fun ChatScreen(
         }
     }
 
-    // DIÁLOGOS DE OPCIONES
+    // AVISO DE LLAMADA ENTRANTE
+    if (incomingCallChannel != null) {
+        AlertDialog(
+            onDismissRequest = { /* Obligatorio aceptar o rechazar */ },
+            title = { Text("Videollamada Entrante") },
+            text = { Text("${contact.name} te está llamando...") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val intent = Intent(context, VideoCallActivity::class.java).apply {
+                            putExtra("CHANNEL_NAME", incomingCallChannel)
+                            putExtra("TOKEN", "")
+                        }
+                        context.startActivity(intent)
+                        incomingCallChannel = null
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))
+                ) { Text("UNIRSE") }
+            },
+            dismissButton = {
+                TextButton(onClick = { 
+                    ChatManager.endCallSignal(contact.uid)
+                    incomingCallChannel = null
+                }) { Text("RECHAZAR", color = Color.Red) }
+            }
+        )
+    }
+
     if (selectedMessageForOptions != null) {
         AlertDialog(
             onDismissRequest = { selectedMessageForOptions = null },
@@ -185,7 +236,6 @@ fun ChatScreen(
     }
 
     if (showForwardDialog && selectedMessageForOptions != null) {
-        // CORRECCIÓN: Obtenemos el texto fuera del onClick
         val forwardLabel = context.getString(R.string.message_forwarded)
         AlertDialog(
             onDismissRequest = { 
