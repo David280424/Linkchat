@@ -121,9 +121,13 @@ class MainActivity : ComponentActivity() {
             var firebaseContacts by remember { mutableStateOf(listOf<Contact>()) }
             var phoneContacts by remember { mutableStateOf(listOf<Contact>()) }
             
-            // Unimos ambas listas de contactos
-            val allContacts = remember(firebaseContacts, phoneContacts) {
-                (firebaseContacts + phoneContacts).distinctBy { it.uid }
+            // Unimos ambas listas de contactos (solo si NO es admin)
+            val allContacts = remember(firebaseContacts, phoneContacts, currentRole) {
+                if (currentRole == "admin") {
+                    firebaseContacts.distinctBy { it.uid }
+                } else {
+                    (firebaseContacts + phoneContacts).distinctBy { it.uid }
+                }
             }
 
             var globalIncomingCall by remember { mutableStateOf<Pair<String, String>?>(null) }
@@ -138,13 +142,16 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            LaunchedEffect(isLoggedIn) {
-                if (isLoggedIn) {
+            // Solo solicita permisos si NO es admin
+            LaunchedEffect(isLoggedIn, currentRole) {
+                if (isLoggedIn && currentRole != "admin") {
                     if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
                         permissionLauncher.launch(arrayOf(Manifest.permission.READ_CONTACTS, Manifest.permission.CALL_PHONE))
                     } else {
                         phoneContacts = fetchPhoneContacts(context)
                     }
+                } else if (currentRole == "admin") {
+                    phoneContacts = emptyList() // El admin nunca ve la agenda del teléfono
                 }
             }
 
@@ -173,6 +180,11 @@ class MainActivity : ComponentActivity() {
                     phoneAuth.setUserOnlineStatus(true)
                     val myUid = auth.currentUser?.uid ?: return@LaunchedEffect
                     
+                    // Obtener rol primero para saber si pedir contactos o no
+                    phoneAuth.getCurrentUserRole { ok, role, _ ->
+                        if (ok) currentRole = role ?: "user"
+                    }
+
                     db.collection("chats").addSnapshotListener { snapshots, _ ->
                         snapshots?.documents?.forEach { doc ->
                             if (doc.id.contains(myUid)) {
