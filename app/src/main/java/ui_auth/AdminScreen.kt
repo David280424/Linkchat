@@ -25,7 +25,6 @@ fun AdminScreen(
     var userToDelete by remember { mutableStateOf<Contact?>(null) }
     var isLoading by remember { mutableStateOf(false) }
 
-    // Dialogo de confirmacion antes de eliminar
     if (userToDelete != null) {
         AlertDialog(
             onDismissRequest = { userToDelete = null },
@@ -109,11 +108,6 @@ fun AdminScreen(
                                     Text(
                                         user.email,
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                    Text(
-                                        "UID: ${user.uid.take(12)}...",
-                                        style = MaterialTheme.typography.labelSmall,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }

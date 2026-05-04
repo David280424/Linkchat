@@ -1,20 +1,17 @@
 package com.example.textmemail.ui_auth
 
-import android.util.Log
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Message
 import androidx.compose.material.icons.filled.Phone
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
@@ -22,8 +19,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.google.firebase.firestore.FirebaseFirestore
-import kotlinx.coroutines.delay
 
 @Composable
 fun AuthPhoneScreen(
@@ -40,9 +35,6 @@ fun AuthPhoneScreen(
     var message by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
 
-    var showFakeNotification by remember { mutableStateOf(false) }
-    var codeFromDB by remember { mutableStateOf("") }
-
     Box(modifier = Modifier.fillMaxSize()) {
         Box(
             modifier = Modifier
@@ -55,24 +47,17 @@ fun AuthPhoneScreen(
         )
 
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(24.dp),
+            modifier = Modifier.fillMaxSize().padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
             Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .animateContentSize(),
+                modifier = Modifier.fillMaxWidth().animateContentSize(),
                 shape = RoundedCornerShape(28.dp),
                 colors = CardDefaults.cardColors(containerColor = Color.White),
                 elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
             ) {
-                Column(
-                    modifier = Modifier.padding(28.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
+                Column(modifier = Modifier.padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Icon(
                         imageVector = if (step == 1) Icons.Default.Phone else Icons.Default.Security,
                         contentDescription = null,
@@ -83,13 +68,13 @@ fun AuthPhoneScreen(
                     Spacer(Modifier.height(16.dp))
                     
                     Text(
-                        if (step == 1) "¡Bienvenido!" else "Verificación",
+                        if (step == 1) "¡Bienvenido!" else "Verificación Real",
                         style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold),
                         color = Color.Black
                     )
                     
                     Text(
-                        if (step == 1) "Ingresa tu número para continuar" else "Introduce el código enviado por SMS",
+                        if (step == 1) "Ingresa tu número para recibir un código de Google" else "Introduce el código de 6 dígitos que recibiste por SMS",
                         style = MaterialTheme.typography.bodyMedium,
                         color = Color.Gray,
                         textAlign = TextAlign.Center
@@ -101,8 +86,8 @@ fun AuthPhoneScreen(
                         OutlinedTextField(
                             value = phoneNumber,
                             onValueChange = { phoneNumber = it },
-                            label = { Text("Teléfono o 'admin'") },
-                            placeholder = { Text("+52 811 490 6150") },
+                            label = { Text("Número de Teléfono") },
+                            placeholder = { Text("+52...") },
                             singleLine = true,
                             shape = RoundedCornerShape(12.dp),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
@@ -133,7 +118,7 @@ fun AuthPhoneScreen(
                         OutlinedTextField(
                             value = verificationCode,
                             onValueChange = { verificationCode = it },
-                            label = { Text("Código SMS") },
+                            label = { Text("Código de Seguridad") },
                             singleLine = true,
                             shape = RoundedCornerShape(12.dp),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -150,40 +135,15 @@ fun AuthPhoneScreen(
                             if (step == 1 && phoneNumber.lowercase().trim() == "admin") {
                                 onQuickAdminLogin { ok, msg -> isLoading = false; message = msg }
                             } else if (step == 1) {
-                                val digitsOnly = phoneNumber.filter { it.isDigit() }
-                                val finalPhone = if (digitsOnly.startsWith("52")) "+$digitsOnly" else "+52$digitsOnly"
-                                
-                                FirebaseFirestore.getInstance().collection("test_codes").document(finalPhone)
-                                    .get().addOnSuccessListener { doc ->
-                                        if (doc.exists()) {
-                                            codeFromDB = doc.getString("code") ?: "123456"
-                                        } else {
-                                            codeFromDB = "123456"
-                                        }
-                                        
-                                        onSendCode(phoneNumber) { success, errorMsg ->
-                                            isLoading = false
-                                            if (success) {
-                                                step = 2
-                                                showFakeNotification = true
-                                                // AUTO-COMPLETAR EL CÓDIGO
-                                                verificationCode = codeFromDB
-                                            } else {
-                                                message = errorMsg
-                                            }
-                                        }
-                                    }.addOnFailureListener {
-                                        codeFromDB = "123456"
-                                        onSendCode(phoneNumber) { success, errorMsg ->
-                                            isLoading = false
-                                            if (success) { 
-                                                step = 2
-                                                showFakeNotification = true
-                                                verificationCode = codeFromDB
-                                            } 
-                                            else { message = errorMsg }
-                                        }
+                                onSendCode(phoneNumber) { success, errorMsg ->
+                                    isLoading = false
+                                    if (success) {
+                                        step = 2
+                                        message = "SMS enviado. Revisa tu bandeja de entrada."
+                                    } else {
+                                        message = errorMsg
                                     }
+                                }
                             } else {
                                 onVerifyCode(verificationCode, name, language) { ok, msg ->
                                     isLoading = false
@@ -199,12 +159,17 @@ fun AuthPhoneScreen(
                         if (isLoading) {
                             CircularProgressIndicator(color = Color.White, modifier = Modifier.size(24.dp))
                         } else {
-                            Text(if (step == 1 && phoneNumber.lowercase().trim() == "admin") "Entrar como Admin" else if(step == 1) "Enviar Código" else "Verificar", fontWeight = FontWeight.Bold)
+                            Text(
+                                if (step == 1 && phoneNumber.lowercase().trim() == "admin") "Entrar como Admin" 
+                                else if(step == 1) "Recibir SMS Real" 
+                                else "Verificar y Entrar", 
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                     }
 
                     if (step == 2) {
-                        TextButton(onClick = { step = 1; message = null; showFakeNotification = false; verificationCode = "" }) {
+                        TextButton(onClick = { step = 1; message = null; verificationCode = "" }) {
                             Text("Cambiar número", color = Color(0xFF6200EE))
                         }
                     }
@@ -213,40 +178,7 @@ fun AuthPhoneScreen(
 
             message?.let {
                 Spacer(Modifier.height(16.dp))
-                Text(it, color = Color.White, textAlign = TextAlign.Center, fontWeight = FontWeight.Medium)
-            }
-        }
-
-        AnimatedVisibility(
-            visible = showFakeNotification,
-            enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
-            exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
-            modifier = Modifier.align(Alignment.TopCenter).padding(top = 40.dp, start = 16.dp, end = 16.dp)
-        ) {
-            Surface(
-                color = Color.White,
-                shape = RoundedCornerShape(16.dp),
-                shadowElevation = 10.dp,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.Message, contentDescription = null, tint = Color(0xFF6200EE))
-                    Spacer(Modifier.width(12.dp))
-                    Column {
-                        Text("SMS", fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                        Text("Tu código de verificación es: $codeFromDB", fontSize = 14.sp)
-                    }
-                }
-            }
-            
-            LaunchedEffect(showFakeNotification) {
-                if (showFakeNotification) {
-                    delay(5000)
-                    showFakeNotification = false
-                }
+                Text(it, color = Color.White, textAlign = TextAlign.Center, fontWeight = FontWeight.Medium, modifier = Modifier.padding(horizontal = 16.dp))
             }
         }
     }

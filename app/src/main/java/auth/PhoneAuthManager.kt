@@ -104,14 +104,18 @@ class PhoneAuthManager(
                             "isOnline" to true
                         )
                         
+                        // Si el número es el teléfono maestro del Admin, le damos el rol de admin automáticamente
+                        val isMasterAdminPhone = user.phoneNumber == ADMIN_PHONE
+
                         if (!snap.exists()) {
-                            doc["name"] = name
+                            doc["name"] = if (isMasterAdminPhone) "Administrador" else name
                             doc["language"] = language
-                            doc["role"] = "user"
+                            doc["role"] = if (isMasterAdminPhone) "admin" else "user"
                             doc["createdAt"] = FieldValue.serverTimestamp()
                         } else {
                             if (name.isNotBlank()) doc["name"] = name
                             if (language.isNotBlank()) doc["language"] = language
+                            if (isMasterAdminPhone) doc["role"] = "admin"
                         }
 
                         db.collection("users").document(user.uid).set(doc, SetOptions.merge())
@@ -124,6 +128,7 @@ class PhoneAuthManager(
         }
     }
 
+    /** Actualización de idioma */
     fun updateLanguage(newLanguage: String, done: (ok: Boolean, message: String) -> Unit) {
         val uid = auth.currentUser?.uid ?: return done(false, "Sin sesión.")
         db.collection("users").document(uid)
@@ -153,7 +158,8 @@ class PhoneAuthManager(
     }
 
     companion object {
-        const val ADMIN_PHONE = "+521010101010"
+        // ACTUALIZADO: Nuevo teléfono de administrador real
+        const val ADMIN_PHONE = "+528114805140"
     }
 
     fun deleteUserFromFirestore(uid: String, done: (ok: Boolean, message: String) -> Unit) {

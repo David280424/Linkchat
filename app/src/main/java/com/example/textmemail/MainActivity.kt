@@ -4,11 +4,9 @@ package com.example.textmemail
 import android.Manifest
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.ContactsContract
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -16,22 +14,28 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.automirrored.filled.Message
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
+import androidx.compose.ui.unit.sp
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -42,14 +46,18 @@ import auth.PhoneAuthManager
 import auth.ChatManager
 import com.example.textmemail.ui_auth.AdminScreen
 import com.example.textmemail.ui_auth.AuthPhoneScreen
-import com.example.textmemail.ui_chat.ChatScreen
-import com.example.textmemail.ui_chat.ContactsScreen
+import ui_chat.ChatScreen
+import ui_chat.ContactsScreen
 import com.example.textmemail.models.Contact
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.Query
+import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.util.Locale
+import java.util.Date
+import java.text.SimpleDateFormat
 
 private val Context.dataStore by preferencesDataStore(name = "settings")
 private val KEY_LANG = stringPreferencesKey("language")
@@ -63,7 +71,6 @@ private fun setAppLocale(activity: ComponentActivity, langTag: String) {
     activity.resources.updateConfiguration(cfg, activity.resources.displayMetrics)
 }
 
-/** Lee contactos del teléfono */
 fun fetchPhoneContacts(context: Context): List<Contact> {
     val contactList = mutableListOf<Contact>()
     val cursor = context.contentResolver.query(
@@ -80,7 +87,7 @@ fun fetchPhoneContacts(context: Context): List<Contact> {
                 contactList.add(Contact(
                     uid = ChatManager.normalizePhone(number), 
                     name = name ?: "Sin nombre", 
-                    email = number, // Usamos el campo email para mostrar el número
+                    email = number,
                     isOnline = false
                 ))
             }
@@ -109,7 +116,6 @@ class MainActivity : ComponentActivity() {
         setContent {
             val context = LocalContext.current
             var isLoggedIn by remember { mutableStateOf(auth.currentUser != null) }
-            var currentIdentifier by remember { mutableStateOf(auth.currentUser?.phoneNumber ?: auth.currentUser?.email ?: "") }
             var currentLanguage by remember { mutableStateOf(DEFAULT_LANG) }
             var currentRole by remember { mutableStateOf("user") }
 
@@ -121,19 +127,15 @@ class MainActivity : ComponentActivity() {
             var firebaseContacts by remember { mutableStateOf(listOf<Contact>()) }
             var phoneContacts by remember { mutableStateOf(listOf<Contact>()) }
             
-            // Unimos ambas listas de contactos (solo si NO es admin)
             val allContacts = remember(firebaseContacts, phoneContacts, currentRole) {
-                if (currentRole == "admin") {
-                    firebaseContacts.distinctBy { it.uid }
-                } else {
-                    (firebaseContacts + phoneContacts).distinctBy { it.uid }
-                }
+                if (currentRole == "admin") firebaseContacts.distinctBy { it.uid }
+                else (firebaseContacts + phoneContacts).distinctBy { it.uid }
             }
 
             var globalIncomingCall by remember { mutableStateOf<Pair<String, String>?>(null) }
+            var inAppNotification by remember { mutableStateOf<Pair<Contact, String>?>(null) }
             val db = FirebaseFirestore.getInstance()
 
-            // Lanzador de permisos
             val permissionLauncher = rememberLauncherForActivityResult(
                 ActivityResultContracts.RequestMultiplePermissions()
             ) { perms ->
@@ -142,16 +144,13 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // Solo solicita permisos si NO es admin
             LaunchedEffect(isLoggedIn, currentRole) {
                 if (isLoggedIn && currentRole != "admin") {
-                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
-                        permissionLauncher.launch(arrayOf(Manifest.permission.READ_CONTACTS, Manifest.permission.CALL_PHONE))
-                    } else {
-                        phoneContacts = fetchPhoneContacts(context)
+                    val perms = mutableListOf(Manifest.permission.READ_CONTACTS, Manifest.permission.CALL_PHONE)
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                        perms.add(Manifest.permission.POST_NOTIFICATIONS)
                     }
-                } else if (currentRole == "admin") {
-                    phoneContacts = emptyList() // El admin nunca ve la agenda del teléfono
+                    permissionLauncher.launch(perms.toTypedArray())
                 }
             }
 
@@ -165,8 +164,7 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(Unit) {
                 lifecycleScope.launch {
                     repeatOnLifecycle(Lifecycle.State.STARTED) {
-                        applicationContext.dataStore.data
-                            .map { it[KEY_LANG] ?: DEFAULT_LANG }
+                        applicationContext.dataStore.data.map { it[KEY_LANG] ?: DEFAULT_LANG }
                             .collect { lang ->
                                 setAppLocale(this@MainActivity, lang)
                                 currentLanguage = lang
@@ -180,27 +178,35 @@ class MainActivity : ComponentActivity() {
                     phoneAuth.setUserOnlineStatus(true)
                     val myUid = auth.currentUser?.uid ?: return@LaunchedEffect
                     
-                    // Obtener rol primero para saber si pedir contactos o no
+                    FirebaseMessaging.getInstance().token.addOnSuccessListener { token ->
+                        db.collection("users").document(myUid).update("fcmToken", token)
+                    }
+
                     phoneAuth.getCurrentUserRole { ok, role, _ ->
                         if (ok) currentRole = role ?: "user"
                     }
 
-                    db.collection("chats").addSnapshotListener { snapshots, _ ->
-                        snapshots?.documents?.forEach { doc ->
-                            if (doc.id.contains(myUid)) {
-                                val activeCall = doc.get("activeCall") as? Map<*, *>
-                                val callerId = activeCall?.get("callerId") as? String
-                                val channel = activeCall?.get("channelName") as? String
-                                if (callerId != null && callerId != myUid) {
-                                    globalIncomingCall = callerId to (channel ?: "")
-                                } else if (activeCall == null) {
-                                    globalIncomingCall = null
+                    // Listener para llamadas entrantes en cualquier chat
+                    db.collection("chats")
+                        .whereArrayContains("participants", myUid)
+                        .addSnapshotListener { snapshots, _ ->
+                            val callDoc = snapshots?.documents?.find { doc ->
+                                val call = doc.get("activeCall") as? Map<*, *>
+                                call?.get("status") == "ringing" && call?.get("callerId") != myUid
+                            }
+                            
+                            if (callDoc != null) {
+                                val call = callDoc.get("activeCall") as Map<*, *>
+                                val cId = call["callerId"] as? String
+                                val cName = call["channelName"] as? String
+                                if (cId != null && cName != null) {
+                                    globalIncomingCall = cId to cName
                                 }
+                            } else {
+                                globalIncomingCall = null
                             }
                         }
-                    }
                     
-                    // Escuchar usuarios de Firebase
                     db.collection("users").addSnapshotListener { snaps, _ ->
                         firebaseContacts = snaps?.documents?.mapNotNull { doc ->
                             if (doc.id != auth.currentUser?.uid) {
@@ -213,22 +219,30 @@ class MainActivity : ComponentActivity() {
                             } else null
                         } ?: emptyList()
                     }
+
+                    db.collectionGroup("messages")
+                        .whereEqualTo("receiverId", myUid)
+                        .whereEqualTo("isRead", false)
+                        .orderBy("timestamp", Query.Direction.DESCENDING)
+                        .limit(1)
+                        .addSnapshotListener { snaps, _ ->
+                            val msgDoc = snaps?.documents?.firstOrNull() ?: return@addSnapshotListener
+                            val senderId = msgDoc.getString("senderId") ?: ""
+                            val text = msgDoc.getString("text") ?: ""
+                            if (selectedContact?.uid != senderId) {
+                                val sender = firebaseContacts.find { it.uid == senderId } 
+                                    ?: Contact(uid = senderId, name = "Mensaje Nuevo")
+                                inAppNotification = sender to text
+                            }
+                        }
                 }
             }
 
-            DisposableEffect(Unit) {
-                val l = FirebaseAuth.AuthStateListener { fa ->
-                    isLoggedIn = fa.currentUser != null
-                    currentIdentifier = fa.currentUser?.phoneNumber ?: fa.currentUser?.email ?: ""
-                }
-                auth.addAuthStateListener(l)
-                onDispose { 
-                    phoneAuth.setUserOnlineStatus(false)
-                    auth.removeAuthStateListener(l) 
-                }
-            }
-
-            MaterialTheme(colorScheme = lightColorScheme(primary = Color(0xFF673AB7), secondary = Color(0xFF00BFA5))) {
+            MaterialTheme(colorScheme = lightColorScheme(
+                primary = Color(0xFF673AB7), 
+                secondary = Color(0xFF00BFA5),
+                surfaceVariant = Color(0xFFF0F2F5)
+            )) {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     val navDestination = when {
                         !isLoggedIn -> NavDestination.Auth
@@ -239,48 +253,120 @@ class MainActivity : ComponentActivity() {
                         else -> NavDestination.Home
                     }
 
-                    if (globalIncomingCall != null) {
-                        AlertDialog(
-                            onDismissRequest = { },
-                            title = { Text("Llamada Entrante") },
-                            text = { Text("Están intentando contactar contigo por video.") },
-                            confirmButton = {
-                                Button(onClick = {
-                                    val intent = Intent(this@MainActivity, VideoCallActivity::class.java).apply {
-                                        putExtra("CHANNEL_NAME", globalIncomingCall!!.second)
+                    Box(Modifier.fillMaxSize()) {
+                        AnimatedContent(
+                            targetState = navDestination, 
+                            label = "Navigation",
+                            transitionSpec = { fadeIn() togetherWith fadeOut() }
+                        ) { state ->
+                            when (state) {
+                                is NavDestination.Auth -> AuthPhoneScreen(
+                                    onSendCode = { phone, cb -> phoneAuth.sendVerificationCode(this@MainActivity, phone, cb) },
+                                    onVerifyCode = { c, n, l, done -> phoneAuth.verifyCode(c, n, l) { ok, msg -> if (ok) { isLoggedIn = true; applyLanguage(l, true) }; done(ok, msg) } },
+                                    onQuickAdminLogin = { done -> phoneAuth.quickAdminLogin { ok, msg -> if (ok) { isLoggedIn = true; applyLanguage(DEFAULT_LANG, true) }; done(ok, msg) } },
+                                    onLanguageChanged = { l -> applyLanguage(l, false) }
+                                )
+                                is NavDestination.Chat -> ChatScreen(contact = state.contact, allContacts = allContacts, onBack = { selectedContact = null })
+                                is NavDestination.Admin -> AdminScreen(users = firebaseContacts, onDeleteUser = { c, cb -> phoneAuth.deleteUserFromFirestore(c.uid, cb) }, onBack = { showAdmin = false })
+                                is NavDestination.Settings -> SettingsScreen(
+                                    currentLanguage = currentLanguage, 
+                                    onSave = { l -> phoneAuth.updateLanguage(l) { _, _ -> }; applyLanguage(l, true) }, 
+                                    onClose = { showSettings = false },
+                                    onLogout = {
+                                        phoneAuth.signOut()
+                                        isLoggedIn = false
+                                        showSettings = false
+                                        selectedContact = null
                                     }
-                                    startActivity(intent)
-                                    globalIncomingCall = null
-                                }) { Text("ACEPTAR") }
-                            },
-                            dismissButton = {
-                                TextButton(onClick = {
-                                    ChatManager.endCallSignal(globalIncomingCall!!.first)
-                                    globalIncomingCall = null
-                                }) { Text("RECHAZAR", color = Color.Red) }
+                                )
+                                is NavDestination.Contacts -> ContactsScreen(contacts = allContacts, onBack = { showContacts = false }, onOpenChat = { c -> selectedContact = c })
+                                is NavDestination.Home -> HomeScreen(
+                                    myUid = auth.currentUser?.uid ?: "",
+                                    allContacts = allContacts,
+                                    onOpenChat = { selectedContact = it },
+                                    onOpenSettings = { showSettings = true },
+                                    onOpenContacts = { showContacts = true },
+                                    onOpenAdmin = if (currentRole == "admin") {{ showAdmin = true }} else null
+                                )
                             }
-                        )
-                    }
+                        }
 
-                    AnimatedContent(targetState = navDestination, label = "Navigation") { state ->
-                        when (state) {
-                            is NavDestination.Auth -> AuthPhoneScreen(
-                                onSendCode = { phone, cb ->
-                                    phoneAuth.sendVerificationCode(this@MainActivity, phone) { s, e -> cb(s, e) }
-                                },
-                                onVerifyCode = { c, n, l, done ->
-                                    phoneAuth.verifyCode(c, n, l) { ok, msg -> if (ok) applyLanguage(l, true); done(ok, msg) }
-                                },
-                                onQuickAdminLogin = { done ->
-                                    phoneAuth.quickAdminLogin { ok, msg -> if (ok) applyLanguage(DEFAULT_LANG, true); done(ok, msg) }
-                                },
-                                onLanguageChanged = { l -> applyLanguage(l, false) }
-                            )
-                            is NavDestination.Chat -> ChatScreen(contact = state.contact, allContacts = allContacts, onBack = { selectedContact = null })
-                            is NavDestination.Admin -> AdminScreen(users = firebaseContacts, onDeleteUser = { c, cb -> phoneAuth.deleteUserFromFirestore(c.uid, cb) }, onBack = { showAdmin = false })
-                            is NavDestination.Settings -> SettingsScreen(currentLanguage = currentLanguage, onSave = { l -> phoneAuth.updateLanguage(l) { _, _ -> }; applyLanguage(l, true) }, onClose = { showSettings = false })
-                            is NavDestination.Contacts -> ContactsScreen(contacts = allContacts, onBack = { showContacts = false }, onOpenChat = { c -> selectedContact = c })
-                            is NavDestination.Home -> HomeScreen(identifier = currentIdentifier, role = currentRole, onOpenSettings = { showSettings = true }, onSignOut = { phoneAuth.signOut() }, onOpenContacts = { showContacts = true }, onOpenAdmin = if (phoneAuth.isCurrentUserAdmin()) {{ showAdmin = true }} else null)
+                        // Notificación In-App de Mensajes
+                        inAppNotification?.let { notificationData ->
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp)
+                                    .align(Alignment.TopCenter)
+                                    .clickable { selectedContact = notificationData.first; inAppNotification = null },
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                                elevation = CardDefaults.cardElevation(8.dp)
+                            ) {
+                                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.AutoMirrored.Filled.Message, null, tint = MaterialTheme.colorScheme.primary)
+                                    Spacer(Modifier.width(12.dp))
+                                    Column {
+                                        Text(notificationData.first.name.ifBlank { notificationData.first.email }, fontWeight = FontWeight.Bold)
+                                        Text(notificationData.second, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    }
+                                    Spacer(Modifier.weight(1f))
+                                    IconButton(onClick = { inAppNotification = null }) { Icon(Icons.Default.Close, null) }
+                                }
+                            }
+                            LaunchedEffect(notificationData) { kotlinx.coroutines.delay(5000); inAppNotification = null }
+                        }
+
+                        // Notificación de Llamada Entrante (Estilo Heads-up de WhatsApp)
+                        globalIncomingCall?.let { callData ->
+                            val caller = firebaseContacts.find { it.uid == callData.first } ?: Contact(uid = callData.first, name = "Usuario")
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(16.dp)
+                                    .align(Alignment.TopCenter)
+                                    .statusBarsPadding(),
+                                shape = RoundedCornerShape(20.dp),
+                                colors = CardDefaults.cardColors(containerColor = Color(0xFF1C1C1E)),
+                                elevation = CardDefaults.cardElevation(16.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(16.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Surface(modifier = Modifier.size(52.dp), shape = CircleShape, color = Color(0xFF673AB7)) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Text(caller.name.take(1).uppercase(), color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
+                                        }
+                                    }
+                                    Spacer(Modifier.width(16.dp))
+                                    Column(Modifier.weight(1f)) {
+                                        Text("Videollamada entrante", color = Color(0xFF00BFA5), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        Text(caller.name.ifBlank { caller.email }, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    }
+                                    
+                                    Row {
+                                        IconButton(
+                                            onClick = {
+                                                ChatManager.endCallSignal(callData.first)
+                                                globalIncomingCall = null
+                                            },
+                                            modifier = Modifier.background(Color(0xFFFF3B30), CircleShape).size(44.dp)
+                                        ) { Icon(Icons.Default.CallEnd, null, tint = Color.White) }
+                                        
+                                        Spacer(Modifier.width(12.dp))
+                                        
+                                        IconButton(
+                                            onClick = {
+                                                val intent = Intent(this@MainActivity, VideoCallActivity::class.java).apply { putExtra("CHANNEL_NAME", callData.second) }
+                                                startActivity(intent)
+                                                globalIncomingCall = null
+                                            },
+                                            modifier = Modifier.background(Color(0xFF34C759), CircleShape).size(44.dp)
+                                        ) { Icon(Icons.Default.Call, null, tint = Color.White) }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -297,43 +383,190 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun HomeScreen(identifier: String, role: String, onOpenSettings: () -> Unit, onSignOut: () -> Unit, onOpenContacts: () -> Unit, onOpenAdmin: (() -> Unit)? = null) {
-    Box(modifier = Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFFEDE7F6), Color(0xFFF5F5F7))))) {
-        Column(modifier = Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically)) {
-            Icon(Icons.Default.AccountCircle, null, Modifier.size(100.dp), tint = MaterialTheme.colorScheme.primary)
-            Text(stringResource(R.string.welcome), style = MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold))
-            Card(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
-                Column(modifier = Modifier.padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(identifier.ifBlank { "Usuario" }, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Bold)
+private fun HomeScreen(
+    myUid: String,
+    allContacts: List<Contact>,
+    onOpenChat: (Contact) -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenContacts: () -> Unit,
+    onOpenAdmin: (() -> Unit)?
+) {
+    val db = FirebaseFirestore.getInstance()
+    var activeChats by remember { mutableStateOf(listOf<Map<String, Any>>()) }
+
+    LaunchedEffect(myUid) {
+        db.collection("chats")
+            .whereArrayContains("participants", myUid)
+            .addSnapshotListener { snaps, _ ->
+                // Ordenamos manualmente por lastTimestamp de forma descendente 
+                // para que los chats más recientes aparezcan siempre arriba
+                activeChats = snaps?.documents?.map { it.data?.plus("id" to it.id) ?: emptyMap() }
+                    ?.sortedByDescending { it["lastTimestamp"] as? Long ?: 0L }
+                    ?: emptyList()
+            }
+    }
+
+    Scaffold(
+        topBar = {
+            CenterAlignedTopAppBar(
+                title = { Text("TextMeMail", fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.primary) },
+                actions = {
+                    IconButton(onClick = onOpenSettings) { Icon(Icons.Default.Settings, null) }
+                    if (onOpenAdmin != null) IconButton(onClick = onOpenAdmin) { Icon(Icons.Default.AdminPanelSettings, null, tint = Color.Red) }
+                }
+            )
+        },
+        floatingActionButton = {
+            FloatingActionButton(onClick = onOpenContacts, containerColor = MaterialTheme.colorScheme.primary, shape = CircleShape) {
+                Icon(Icons.Default.Chat, null, tint = Color.White)
+            }
+        }
+    ) { padding ->
+        if (activeChats.isEmpty()) {
+            Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Icon(Icons.Default.ChatBubbleOutline, null, modifier = Modifier.size(64.dp), tint = Color.LightGray)
+                    Spacer(Modifier.height(16.dp))
+                    Text("No tienes chats activos. ¡Inicia uno!", color = Color.Gray)
                 }
             }
-            HomeButton(stringResource(R.string.contacts_chat), Icons.Default.Chat, onOpenContacts, MaterialTheme.colorScheme.primary)
-            HomeButton(stringResource(R.string.settings), Icons.Default.Settings, onOpenSettings, MaterialTheme.colorScheme.secondary)
-            if (onOpenAdmin != null) HomeButton(stringResource(R.string.admin_panel), Icons.Default.AdminPanelSettings, onOpenAdmin, Color(0xFFE53935))
-            TextButton(onClick = onSignOut) { Row(verticalAlignment = Alignment.CenterVertically) { Icon(Icons.Default.Logout, null, Modifier.size(18.dp)); Spacer(Modifier.width(8.dp)); Text(stringResource(R.string.sign_out), color = Color.Gray) } }
+        } else {
+            LazyColumn(modifier = Modifier.fillMaxSize().padding(padding)) {
+                items(activeChats) { chat ->
+                    val participants = chat["participants"] as? List<*>
+                    val otherUid = participants?.firstOrNull { it != myUid } as? String ?: ""
+                    val contact = allContacts.find { it.uid == otherUid } ?: Contact(uid = otherUid, name = "Usuario")
+                    
+                    var unreadCount by remember { mutableIntStateOf(0) }
+                    LaunchedEffect(chat["id"]) {
+                        db.collection("chats").document(chat["id"] as String).collection("messages")
+                            .whereEqualTo("receiverId", myUid)
+                            .whereEqualTo("isRead", false)
+                            .addSnapshotListener { snaps, _ ->
+                                unreadCount = snaps?.size() ?: 0
+                            }
+                    }
+
+                    ChatListItem(
+                        contact = contact,
+                        lastMsg = chat["lastMessage"] as? String ?: "",
+                        time = chat["lastTimestamp"] as? Long ?: 0L,
+                        unreadCount = unreadCount,
+                        onClick = { onOpenChat(contact) }
+                    )
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp, color = Color.LightGray.copy(alpha = 0.5f))
+                }
+            }
         }
     }
 }
 
 @Composable
-fun HomeButton(text: String, icon: ImageVector, onClick: () -> Unit, color: Color) {
-    Button(onClick = onClick, modifier = Modifier.fillMaxWidth().height(56.dp), shape = RoundedCornerShape(12.dp), colors = ButtonDefaults.buttonColors(containerColor = color)) {
-        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Icon(icon, null, Modifier.size(24.dp)); Spacer(Modifier.width(12.dp)); Text(text, fontWeight = FontWeight.SemiBold) }
-    }
+fun ChatListItem(contact: Contact, lastMsg: String, time: Long, unreadCount: Int, onClick: () -> Unit) {
+    val sdf = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
+    val colorUnread = Color(0xFF00BFA5) 
+    val colorBadge = Color(0xFF673AB7) 
+    
+    ListItem(
+        modifier = Modifier.clickable(onClick = onClick),
+        headlineContent = { Text(contact.name.ifBlank { contact.email }, fontWeight = FontWeight.Bold, fontSize = 16.sp) },
+        supportingContent = { 
+            Text(
+                lastMsg, 
+                maxLines = 1, 
+                overflow = TextOverflow.Ellipsis, 
+                color = if (unreadCount > 0) Color.Black else Color.Gray,
+                fontWeight = if (unreadCount > 0) FontWeight.Medium else FontWeight.Normal
+            ) 
+        },
+        leadingContent = {
+            Surface(Modifier.size(52.dp), shape = CircleShape, color = MaterialTheme.colorScheme.primary.copy(0.1f)) {
+                Box(contentAlignment = Alignment.Center) {
+                    Text(
+                        contact.name.take(1).ifBlank { contact.email.take(1) }.uppercase(), 
+                        fontSize = 20.sp, 
+                        fontWeight = FontWeight.Bold, 
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    if (contact.isOnline) {
+                        Surface(
+                            modifier = Modifier.size(14.dp).align(Alignment.BottomEnd).offset(x = (-2).dp, y = (-2).dp),
+                            shape = CircleShape,
+                            color = Color.White
+                        ) {
+                            Box(modifier = Modifier.padding(2.dp).background(colorUnread, CircleShape))
+                        }
+                    }
+                }
+            }
+        },
+        trailingContent = {
+            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.Center) {
+                Text(
+                    if (time > 0) sdf.format(Date(time)) else "", 
+                    fontSize = 12.sp, 
+                    color = if (unreadCount > 0) colorUnread else Color.Gray,
+                    fontWeight = if (unreadCount > 0) FontWeight.Bold else FontWeight.Normal
+                )
+                if (unreadCount > 0) {
+                    Spacer(Modifier.height(6.dp))
+                    Surface(color = colorBadge, shape = CircleShape, modifier = Modifier.size(24.dp)) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(unreadCount.toString(), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+            }
+        }
+    )
 }
 
 @Composable
-private fun SettingsScreen(currentLanguage: String, onSave: (String) -> Unit, onClose: () -> Unit) {
+private fun SettingsScreen(currentLanguage: String, onSave: (String) -> Unit, onLogout: () -> Unit, onClose: () -> Unit) {
     var lang by remember { mutableStateOf(currentLanguage) }
     Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) { IconButton(onClick = onClose) { Icon(Icons.Default.ArrowBack, null, Modifier.size(24.dp)) }; Text(stringResource(R.string.settings), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) }
-        Spacer(Modifier.height(24.dp)); Text(stringResource(R.string.app_language), style = MaterialTheme.typography.titleMedium)
+        Row(verticalAlignment = Alignment.CenterVertically) { 
+            IconButton(onClick = onClose) { Icon(Icons.Default.ArrowBack, null) }
+            Text(stringResource(R.string.settings), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) 
+        }
+        Spacer(Modifier.height(32.dp))
+        
+        Text("Cuenta", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+        Spacer(Modifier.height(16.dp))
+        
+        // Botón de Cerrar Sesión (Visible y llamativo)
+        Card(
+            onClick = onLogout,
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE)),
+            shape = RoundedCornerShape(16.dp)
+        ) {
+            Row(Modifier.padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.AutoMirrored.Filled.Logout, null, tint = Color.Red)
+                Spacer(Modifier.width(16.dp))
+                Text("Cerrar Sesión", color = Color.Red, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp)
+            }
+        }
+
+        Spacer(Modifier.height(32.dp))
+        Text(stringResource(R.string.app_language), style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(12.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(selected = lang == "es", onClick = { lang = "es" }, label = { Text(stringResource(R.string.spanish)) }, shape = RoundedCornerShape(12.dp))
             FilterChip(selected = lang == "en", onClick = { lang = "en" }, label = { Text(stringResource(R.string.english)) }, shape = RoundedCornerShape(12.dp))
         }
-        Spacer(Modifier.weight(1f)); Button(onClick = { onSave(lang) }, modifier = Modifier.fillMaxWidth().height(56.dp), shape = RoundedCornerShape(12.dp)) { Text(stringResource(R.string.save_changes)) }
+
+        Spacer(Modifier.weight(1f))
+        
+        Button(
+            onClick = { onSave(lang) }, 
+            modifier = Modifier.fillMaxWidth().height(56.dp), 
+            shape = RoundedCornerShape(16.dp),
+            elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp)
+        ) { 
+            Text(stringResource(R.string.save_changes), fontWeight = FontWeight.Bold)
+        }
     }
 }

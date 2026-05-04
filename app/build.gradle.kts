@@ -49,9 +49,7 @@ android {
 }
 
 dependencies {
-    // Bajamos la versión de core-ktx para que no pida el SDK 36
     implementation("androidx.core:core-ktx:1.15.0")
-
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
@@ -64,6 +62,11 @@ dependencies {
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.auth)
     implementation(libs.firebase.firestore)
+    implementation(libs.firebase.messaging)
+    implementation(libs.firebase.storage)
+    
+    // Image Loading
+    implementation(libs.coil.compose)
     
     // LIBRERÍAS CRÍTICAS PARA PHONE AUTH
     implementation("com.google.android.gms:play-services-auth:21.2.0")
