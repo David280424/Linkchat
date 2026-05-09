@@ -1,4 +1,3 @@
-// app/src/main/java/com/example/textmemail/ui_chat/MessageBubble.kt
 package com.example.textmemail.ui_chat
 
 import android.media.MediaPlayer
@@ -34,7 +33,9 @@ fun MessageBubble(
     onLongClick: () -> Unit
 ) {
     val timeFormat = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
-    val timeString = timeFormat.format(Date(message.timestamp))
+    // Usamos la función auxiliar getTimestampDate() para manejar Long o Timestamp de forma segura
+    val date = message.getTimestampDate()
+    val timeString = if (date != null) timeFormat.format(date) else ""
 
     Row(
         modifier = Modifier

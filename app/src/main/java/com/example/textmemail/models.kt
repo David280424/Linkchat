@@ -1,5 +1,8 @@
 package com.example.textmemail.models
 
+import com.google.firebase.Timestamp
+import java.util.Date
+
 data class Contact(
     val uid: String = "",
     val name: String = "",
@@ -16,8 +19,16 @@ data class Message(
     val senderId: String = "",
     val receiverId: String = "",
     val text: String = "",
-    val timestamp: Long = 0L,
+    val timestamp: Any? = null,
     val isRead: Boolean = false,
     val mediaUrl: String? = null,
-    val mediaType: String? = null // "image" o "audio"
-)
+    val mediaType: String? = null
+) {
+    fun getTimestampDate(): Date {
+        return when (timestamp) {
+            is Timestamp -> timestamp.toDate()
+            is Long -> Date(timestamp)
+            else -> Date(0)
+        }
+    }
+}

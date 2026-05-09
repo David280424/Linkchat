@@ -1,4 +1,4 @@
-package ui_chat
+package com.example.textmemail.ui_chat
 
 import android.content.Intent
 import android.net.Uri
@@ -66,14 +66,10 @@ fun ContactsScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 8.dp),
-                    placeholder = { Text("Buscar contactos...") },
+                    placeholder = { Text(stringResource(R.string.search_contacts)) },
                     leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                     shape = RoundedCornerShape(12.dp),
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = MaterialTheme.colorScheme.primary,
-                        unfocusedBorderColor = Color.LightGray
-                    )
+                    singleLine = true
                 )
             }
         }
@@ -83,7 +79,7 @@ fun ContactsScreen(
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(
                         if (searchQuery.isEmpty()) stringResource(R.string.no_users_available)
-                        else "No se encontraron contactos para \"$searchQuery\"",
+                        else "No results for \"$searchQuery\"",
                         color = Color.Gray
                     )
                 }
@@ -105,7 +101,6 @@ fun ContactsScreen(
                                     .padding(16.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                // Avatar o Inicial
                                 Surface(
                                     modifier = Modifier.size(45.dp),
                                     shape = CircleShape,
@@ -119,45 +114,13 @@ fun ContactsScreen(
                                         )
                                     }
                                 }
-
                                 Spacer(Modifier.width(16.dp))
-
-                                // Información del contacto
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = contact.name.ifBlank { "Sin nombre" },
-                                        style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.SemiBold
-                                    )
-                                    Text(
-                                        text = contact.email,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = Color.Gray
-                                    )
+                                    Text(text = contact.name.ifBlank { "Sin nombre" }, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                                    Text(text = contact.email, style = MaterialTheme.typography.bodySmall, color = Color.Gray)
                                 }
-
-                                // Botón de Chat
                                 IconButton(onClick = { onOpenChat(contact) }) {
-                                    Icon(
-                                        imageVector = Icons.Default.Chat,
-                                        contentDescription = "Chat",
-                                        tint = MaterialTheme.colorScheme.primary
-                                    )
-                                }
-
-                                // Botón de Llamada Telefónica
-                                IconButton(onClick = {
-                                    val number = contact.email.filter { it.isDigit() || it == '+' }
-                                    if (number.isNotBlank()) {
-                                        val intent = Intent(Intent.ACTION_CALL, Uri.parse("tel:$number"))
-                                        context.startActivity(intent)
-                                    }
-                                }) {
-                                    Icon(
-                                        imageVector = Icons.Default.Call,
-                                        contentDescription = "Llamar",
-                                        tint = Color(0xFF4CAF50)
-                                    )
+                                    Icon(imageVector = Icons.Default.Chat, contentDescription = "Chat", tint = MaterialTheme.colorScheme.primary)
                                 }
                             }
                         }

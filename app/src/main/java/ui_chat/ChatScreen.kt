@@ -1,5 +1,4 @@
-// app/src/main/java/ui_chat/ChatScreen.kt
-package ui_chat
+package com.example.textmemail.ui_chat
 
 import android.Manifest
 import android.content.Intent
@@ -7,6 +6,7 @@ import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -42,7 +43,6 @@ import com.example.textmemail.R
 import com.example.textmemail.VideoCallActivity
 import com.example.textmemail.models.Contact
 import com.example.textmemail.models.Message
-import com.example.textmemail.ui_chat.MessageBubble
 import kotlinx.coroutines.delay
 import java.io.File
 
@@ -56,15 +56,16 @@ fun ChatScreen(
     val context = LocalContext.current
     val messages = remember { mutableStateListOf<Message>() }
     var input by remember { mutableStateOf("") }
-    
-    var selectedMessageForOptions by remember { mutableStateOf<Message?>(null) }
-    var showForwardDialog by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
 
-    var showCallingDialog by remember { mutableStateOf(false) }
-    var showAddMenu by remember { mutableStateOf(false) }
+    var selectedMessageForOptions by remember { mutableStateOf<Message?>(null) }
+    var showForwardDialog by remember { mutableStateOf(false) }
 
-    // Grabación Audio
+    var showCallingDialog by remember { mutableStateOf(false) }
+    var isVoiceOnlyCall by remember { mutableStateOf(false) }
+    var showAddMenu by remember { mutableStateOf(false) }
+    var incomingCallData by remember { mutableStateOf<Pair<String, String>?>(null) }
+
     var isRecording by remember { mutableStateOf(false) }
     var recorder by remember { mutableStateOf<MediaRecorder?>(null) }
     var audioFile by remember { mutableStateOf<File?>(null) }
@@ -73,10 +74,6 @@ fun ChatScreen(
     val offlineLabel = stringResource(R.string.offline)
     val typeMsgPlaceholder = stringResource(R.string.type_message)
     val forwardLabel = stringResource(R.string.message_forwarded)
-    val cancelLabel = stringResource(R.string.cancel)
-    val deleteLabel = stringResource(R.string.delete)
-    val forwardBtnLabel = stringResource(R.string.forward)
-    val optionsTitle = stringResource(R.string.message_options)
 
     val galleryLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         uri?.let { ChatManager.sendMediaMessage(contact.uid, it, "image") { _, _ -> } }
@@ -87,8 +84,21 @@ fun ChatScreen(
             messages.clear()
             messages.addAll(newList)
         }
+        val regInfo = ChatManager.listenForChatInfo(contact.uid) { data ->
+            val activeCall = data?.get("activeCall") as? Map<*, *>
+            val callerId = activeCall?.get("callerId") as? String
+            val channel = activeCall?.get("channelName") as? String
+            val type = activeCall?.get("callType") as? String ?: "video"
+            
+            if (callerId != null && callerId != FirebaseAuth.getInstance().currentUser?.uid && channel != null) {
+                incomingCallData = Pair(channel, type)
+            } else {
+                incomingCallData = null
+            }
+        }
         onDispose {
             regMessages.remove()
+            regInfo.remove()
         }
     }
 
@@ -98,10 +108,11 @@ fun ChatScreen(
         }
     }
 
-    fun startCall() {
+    fun initiateCall(isVoiceOnly: Boolean) {
         val currentUserUid = FirebaseAuth.getInstance().currentUser?.uid ?: return
         val channelName = if (currentUserUid <= contact.uid) "${currentUserUid}_${contact.uid}" else "${contact.uid}_${currentUserUid}"
-        ChatManager.startCallSignal(contact.uid, channelName)
+        isVoiceOnlyCall = isVoiceOnly
+        ChatManager.startCallSignal(contact.uid, channelName, if (isVoiceOnly) "voice" else "video")
         showCallingDialog = true
     }
 
@@ -122,8 +133,14 @@ fun ChatScreen(
                     IconButton(onClick = onBack) { Icon(Icons.Default.ArrowBack, contentDescription = null) }
                 },
                 actions = {
-                    IconButton(onClick = { startCall() }) { Icon(Icons.Default.Videocam, contentDescription = null) }
-                }
+                    IconButton(onClick = { initiateCall(isVoiceOnly = true) }) {
+                        Icon(Icons.Default.Call, contentDescription = "Llamada")
+                    }
+                    IconButton(onClick = { initiateCall(isVoiceOnly = false) }) {
+                        Icon(Icons.Default.Videocam, contentDescription = "Videollamada")
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.White)
             )
         }
     ) { padding ->
@@ -190,9 +207,8 @@ fun ChatScreen(
                     } else {
                         FloatingActionButton(
                             onClick = {
-                                val text = input.trim()
-                                if (text.isNotEmpty()) {
-                                    ChatManager.sendMessage(contact.uid, text) { _, _ -> }
+                                if (input.trim().isNotEmpty()) {
+                                    ChatManager.sendMessage(contact.uid, input.trim())
                                     input = ""
                                 }
                             },
@@ -222,6 +238,7 @@ fun ChatScreen(
             val intent = Intent(context, VideoCallActivity::class.java).apply {
                 val currentUserUid = FirebaseAuth.getInstance().currentUser?.uid ?: ""
                 putExtra("CHANNEL_NAME", if (currentUserUid <= contact.uid) "${currentUserUid}_${contact.uid}" else "${contact.uid}_${currentUserUid}")
+                putExtra("IS_VOICE_CALL", isVoiceOnlyCall)
                 putExtra("TOKEN", "")
             }
             context.startActivity(intent)
@@ -241,12 +258,34 @@ fun ChatScreen(
         }
     }
 
+    if (incomingCallData != null) {
+        val (channel, type) = incomingCallData!!
+        AlertDialog(
+            onDismissRequest = { },
+            title = { Text(if(type == "voice") "Llamada Entrante" else "Videollamada Entrante") },
+            text = { Text("${contact.name} te está llamando...") },
+            confirmButton = {
+                Button(onClick = {
+                    val intent = Intent(context, VideoCallActivity::class.java).apply { 
+                        putExtra("CHANNEL_NAME", channel)
+                        putExtra("IS_VOICE_CALL", type == "voice")
+                    }
+                    context.startActivity(intent)
+                    incomingCallData = null
+                }) { Text("UNIRSE") }
+            },
+            dismissButton = {
+                TextButton(onClick = { ChatManager.endCallSignal(contact.uid); incomingCallData = null }) { Text("RECHAZAR", color = Color.Red) }
+            }
+        )
+    }
+
     if (selectedMessageForOptions != null) {
         AlertDialog(
             onDismissRequest = { selectedMessageForOptions = null },
             confirmButton = {
                 TextButton(onClick = { showForwardDialog = true }) { 
-                    Text(forwardBtnLabel, fontWeight = FontWeight.Bold) 
+                    Text(stringResource(R.string.forward), fontWeight = FontWeight.Bold) 
                 }
             },
             dismissButton = {
@@ -256,17 +295,18 @@ fun ChatScreen(
                         TextButton(onClick = {
                             ChatManager.deleteMessage(contact.uid, selectedMessageForOptions!!.id) { _, _ -> }
                             selectedMessageForOptions = null
-                        }) { Text(deleteLabel, color = Color.Red, fontWeight = FontWeight.Bold) }
+                        }) { Text(stringResource(R.string.delete), color = Color.Red, fontWeight = FontWeight.Bold) }
                     }
-                    TextButton(onClick = { selectedMessageForOptions = null }) { Text(cancelLabel) }
+                    TextButton(onClick = { selectedMessageForOptions = null }) { Text(stringResource(R.string.cancel)) }
                 }
             },
-            title = { Text(optionsTitle) },
+            title = { Text(stringResource(R.string.message_options)) },
             text = { Text(selectedMessageForOptions?.text ?: "") }
         )
     }
 
     if (showForwardDialog && selectedMessageForOptions != null) {
+        val forwardTag = stringResource(R.string.message_forwarded)
         AlertDialog(
             onDismissRequest = { 
                 showForwardDialog = false
@@ -279,10 +319,10 @@ fun ChatScreen(
                         ListItem(
                             headlineContent = { Text(c.name.ifBlank { c.email }) },
                             modifier = Modifier.clickable {
-                                ChatManager.sendMessage(c.uid, "[$forwardLabel]: ${selectedMessageForOptions!!.text}") { _, _ -> }
+                                ChatManager.sendMessage(c.uid, "[$forwardTag]: ${selectedMessageForOptions!!.text}") { _, _ -> }
                                 showForwardDialog = false
                                 selectedMessageForOptions = null
-                                Toast.makeText(context, forwardLabel, Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, forwardTag, Toast.LENGTH_SHORT).show()
                             }
                         )
                     }
@@ -292,7 +332,7 @@ fun ChatScreen(
                 TextButton(onClick = { 
                     showForwardDialog = false
                     selectedMessageForOptions = null
-                }) { Text(cancelLabel) }
+                }) { Text(stringResource(R.string.cancel)) }
             }
         )
     }
@@ -332,7 +372,7 @@ fun OutgoingCallScreen(
                         fontSize = 52.sp,
                         fontWeight = FontWeight.Bold,
                         textAlign = TextAlign.Center,
-                        style = LocalTextStyle.current.copy(
+                        style = TextStyle.Default.copy(
                             platformStyle = PlatformTextStyle(includeFontPadding = false)
                         )
                     )
@@ -430,5 +470,27 @@ fun PulsingText(text: String) {
         color = Color.White.copy(alpha = alpha),
         fontSize = 18.sp,
         fontWeight = FontWeight.Medium
+    )
+}
+
+@Composable
+fun OutgoingCallAnimation() {
+    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
+    val scale by infiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = 2.5f,
+        animationSpec = infiniteRepeatable(animation = tween(1500), repeatMode = RepeatMode.Restart), label = "scale"
+    )
+    val alpha by infiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = 0f,
+        animationSpec = infiniteRepeatable(animation = tween(1500), repeatMode = RepeatMode.Restart), label = "alpha"
+    )
+
+    Box(
+        Modifier
+            .size(60.dp)
+            .graphicsLayer(scaleX = scale, scaleY = scale, alpha = alpha)
+            .background(Color(0xFF673AB7).copy(alpha = 0.3f), CircleShape)
     )
 }

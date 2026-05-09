@@ -4,9 +4,11 @@ package com.example.textmemail
 import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
 import android.provider.ContactsContract
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -36,22 +38,25 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+
 import auth.PhoneAuthManager
 import auth.ChatManager
 import com.example.textmemail.ui_auth.AdminScreen
 import com.example.textmemail.ui_auth.AuthPhoneScreen
-import ui_chat.ChatScreen
-import ui_chat.ContactsScreen
+import com.example.textmemail.ui_chat.ChatScreen
+import com.example.textmemail.ui_chat.ContactsScreen
 import com.example.textmemail.models.Contact
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
+import com.google.firebase.firestore.DocumentChange
 import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -186,7 +191,7 @@ class MainActivity : ComponentActivity() {
                         if (ok) currentRole = role ?: "user"
                     }
 
-                    // Listener para llamadas entrantes en cualquier chat
+                    // Listener para llamadas entrantes
                     db.collection("chats")
                         .whereArrayContains("participants", myUid)
                         .addSnapshotListener { snapshots, _ ->
@@ -194,13 +199,12 @@ class MainActivity : ComponentActivity() {
                                 val call = doc.get("activeCall") as? Map<*, *>
                                 call?.get("status") == "ringing" && call?.get("callerId") != myUid
                             }
-                            
                             if (callDoc != null) {
                                 val call = callDoc.get("activeCall") as Map<*, *>
-                                val cId = call["callerId"] as? String
-                                val cName = call["channelName"] as? String
-                                if (cId != null && cName != null) {
-                                    globalIncomingCall = cId to cName
+                                val channel = call["channelName"] as? String
+                                val type = call["callType"] as? String ?: "video"
+                                if (channel != null) {
+                                    globalIncomingCall = channel to type
                                 }
                             } else {
                                 globalIncomingCall = null
@@ -220,19 +224,22 @@ class MainActivity : ComponentActivity() {
                         } ?: emptyList()
                     }
 
+                    // Listener de notificaciones individuales
                     db.collectionGroup("messages")
                         .whereEqualTo("receiverId", myUid)
                         .whereEqualTo("isRead", false)
-                        .orderBy("timestamp", Query.Direction.DESCENDING)
-                        .limit(1)
                         .addSnapshotListener { snaps, _ ->
-                            val msgDoc = snaps?.documents?.firstOrNull() ?: return@addSnapshotListener
-                            val senderId = msgDoc.getString("senderId") ?: ""
-                            val text = msgDoc.getString("text") ?: ""
-                            if (selectedContact?.uid != senderId) {
-                                val sender = firebaseContacts.find { it.uid == senderId } 
-                                    ?: Contact(uid = senderId, name = "Mensaje Nuevo")
-                                inAppNotification = sender to text
+                            snaps?.documentChanges?.forEach { change ->
+                                if (change.type == DocumentChange.Type.ADDED) {
+                                    val msgDoc = change.document
+                                    val senderId = msgDoc.getString("senderId") ?: ""
+                                    val text = msgDoc.getString("text") ?: ""
+                                    if (selectedContact?.uid != senderId) {
+                                        val sender = firebaseContacts.find { it.uid == senderId } 
+                                            ?: Contact(uid = senderId, name = "Mensaje Nuevo")
+                                        inAppNotification = sender to text
+                                    }
+                                }
                             }
                         }
                 }
@@ -254,50 +261,36 @@ class MainActivity : ComponentActivity() {
                     }
 
                     Box(Modifier.fillMaxSize()) {
-                        AnimatedContent(
-                            targetState = navDestination, 
-                            label = "Navigation",
-                            transitionSpec = { fadeIn() togetherWith fadeOut() }
-                        ) { state ->
+                        AnimatedContent(targetState = navDestination, label = "Navigation") { state ->
                             when (state) {
                                 is NavDestination.Auth -> AuthPhoneScreen(
                                     onSendCode = { phone, cb -> phoneAuth.sendVerificationCode(this@MainActivity, phone, cb) },
-                                    onVerifyCode = { c, n, l, done -> phoneAuth.verifyCode(c, n, l) { ok, msg -> if (ok) { isLoggedIn = true; applyLanguage(l, true) }; done(ok, msg) } },
+                                    onVerifyCode = { code, name, email, pass, lang, isReg, done -> 
+                                        phoneAuth.verifyCode(code, name, email, pass, lang, isReg) { ok, msg ->
+                                            if (ok) { isLoggedIn = true; applyLanguage(lang, true) }
+                                            done(ok, msg)
+                                        }
+                                    },
                                     onQuickAdminLogin = { done -> phoneAuth.quickAdminLogin { ok, msg -> if (ok) { isLoggedIn = true; applyLanguage(DEFAULT_LANG, true) }; done(ok, msg) } },
-                                    onLanguageChanged = { l -> applyLanguage(l, false) }
+                                    onForgotPassword = { email, cb -> phoneAuth.sendPasswordReset(email, cb) },
+                                    onLanguageChanged = { lang -> applyLanguage(lang, false) }
                                 )
                                 is NavDestination.Chat -> ChatScreen(contact = state.contact, allContacts = allContacts, onBack = { selectedContact = null })
                                 is NavDestination.Admin -> AdminScreen(users = firebaseContacts, onDeleteUser = { c, cb -> phoneAuth.deleteUserFromFirestore(c.uid, cb) }, onBack = { showAdmin = false })
-                                is NavDestination.Settings -> SettingsScreen(
-                                    currentLanguage = currentLanguage, 
-                                    onSave = { l -> phoneAuth.updateLanguage(l) { _, _ -> }; applyLanguage(l, true) }, 
-                                    onClose = { showSettings = false },
-                                    onLogout = {
-                                        phoneAuth.signOut()
-                                        isLoggedIn = false
-                                        showSettings = false
-                                        selectedContact = null
-                                    }
-                                )
-                                is NavDestination.Contacts -> ContactsScreen(contacts = allContacts, onBack = { showContacts = false }, onOpenChat = { c -> selectedContact = c })
-                                is NavDestination.Home -> HomeScreen(
-                                    myUid = auth.currentUser?.uid ?: "",
-                                    allContacts = allContacts,
-                                    onOpenChat = { selectedContact = it },
-                                    onOpenSettings = { showSettings = true },
-                                    onOpenContacts = { showContacts = true },
-                                    onOpenAdmin = if (currentRole == "admin") {{ showAdmin = true }} else null
-                                )
+                                is NavDestination.Settings -> SettingsScreen(currentLanguage = currentLanguage, onSave = { l -> phoneAuth.updateLanguage(l) { _, _ -> }; applyLanguage(l, true) }, onClose = { showSettings = false }, onLogout = { phoneAuth.signOut(); isLoggedIn = false; showSettings = false })
+                                is NavDestination.Contacts -> ContactsScreen(contacts = allContacts, onBack = { showContacts = false }, onOpenChat = { c: Contact -> selectedContact = c })
+                                is NavDestination.Home -> HomeScreen(myUid = auth.currentUser?.uid ?: "", allContacts = allContacts, onOpenChat = { selectedContact = it }, onOpenSettings = { showSettings = true }, onOpenContacts = { showContacts = true }, onOpenAdmin = if (currentRole == "admin") {{ showAdmin = true }} else null)
                             }
                         }
 
-                        // Notificación In-App de Mensajes
+                        // Banner de notificación In-App
                         inAppNotification?.let { notificationData ->
                             Card(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(16.dp)
                                     .align(Alignment.TopCenter)
+                                    .statusBarsPadding()
                                     .clickable { selectedContact = notificationData.first; inAppNotification = null },
                                 shape = RoundedCornerShape(12.dp),
                                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
@@ -307,7 +300,7 @@ class MainActivity : ComponentActivity() {
                                     Icon(Icons.AutoMirrored.Filled.Message, null, tint = MaterialTheme.colorScheme.primary)
                                     Spacer(Modifier.width(12.dp))
                                     Column {
-                                        Text(notificationData.first.name.ifBlank { notificationData.first.email }, fontWeight = FontWeight.Bold)
+                                        Text(notificationData.first.name.ifBlank { "Nuevo Mensaje" }, fontWeight = FontWeight.Bold)
                                         Text(notificationData.second, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     }
                                     Spacer(Modifier.weight(1f))
@@ -317,54 +310,26 @@ class MainActivity : ComponentActivity() {
                             LaunchedEffect(notificationData) { kotlinx.coroutines.delay(5000); inAppNotification = null }
                         }
 
-                        // Notificación de Llamada Entrante (Estilo Heads-up de WhatsApp)
+                        // Aviso de llamada (Heads-up)
                         globalIncomingCall?.let { callData ->
-                            val caller = firebaseContacts.find { it.uid == callData.first } ?: Contact(uid = callData.first, name = "Usuario")
                             Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(16.dp)
-                                    .align(Alignment.TopCenter)
-                                    .statusBarsPadding(),
+                                modifier = Modifier.fillMaxWidth().padding(16.dp).align(Alignment.TopCenter).statusBarsPadding(),
                                 shape = RoundedCornerShape(20.dp),
                                 colors = CardDefaults.cardColors(containerColor = Color(0xFF1C1C1E)),
                                 elevation = CardDefaults.cardElevation(16.dp)
                             ) {
-                                Row(
-                                    modifier = Modifier.padding(16.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Surface(modifier = Modifier.size(52.dp), shape = CircleShape, color = Color(0xFF673AB7)) {
-                                        Box(contentAlignment = Alignment.Center) {
-                                            Text(caller.name.take(1).uppercase(), color = Color.White, fontWeight = FontWeight.Bold, fontSize = 20.sp)
-                                        }
-                                    }
-                                    Spacer(Modifier.width(16.dp))
+                                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                                     Column(Modifier.weight(1f)) {
-                                        Text("Videollamada entrante", color = Color(0xFF00BFA5), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                                        Text(caller.name.ifBlank { caller.email }, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text(if(callData.second == "voice") "Llamada entrante" else "Videollamada entrante", color = Color(0xFF00BFA5), fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                                        Text("Llamada en curso", color = Color.White, fontWeight = FontWeight.Bold)
                                     }
-                                    
-                                    Row {
-                                        IconButton(
-                                            onClick = {
-                                                ChatManager.endCallSignal(callData.first)
-                                                globalIncomingCall = null
-                                            },
-                                            modifier = Modifier.background(Color(0xFFFF3B30), CircleShape).size(44.dp)
-                                        ) { Icon(Icons.Default.CallEnd, null, tint = Color.White) }
-                                        
-                                        Spacer(Modifier.width(12.dp))
-                                        
-                                        IconButton(
-                                            onClick = {
-                                                val intent = Intent(this@MainActivity, VideoCallActivity::class.java).apply { putExtra("CHANNEL_NAME", callData.second) }
-                                                startActivity(intent)
-                                                globalIncomingCall = null
-                                            },
-                                            modifier = Modifier.background(Color(0xFF34C759), CircleShape).size(44.dp)
-                                        ) { Icon(Icons.Default.Call, null, tint = Color.White) }
-                                    }
+                                    IconButton(onClick = { ChatManager.endCallSignal(""); globalIncomingCall = null }, modifier = Modifier.background(Color.Red, CircleShape)) { Icon(Icons.Default.CallEnd, null, tint = Color.White) }
+                                    Spacer(Modifier.width(8.dp))
+                                    IconButton(onClick = { 
+                                        val intent = Intent(this@MainActivity, VideoCallActivity::class.java).apply { putExtra("CHANNEL_NAME", callData.first) }
+                                        startActivity(intent)
+                                        globalIncomingCall = null 
+                                    }, modifier = Modifier.background(Color.Green, CircleShape)) { Icon(Icons.Default.Call, null, tint = Color.White) }
                                 }
                             }
                         }
@@ -385,33 +350,24 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun HomeScreen(
-    myUid: String,
-    allContacts: List<Contact>,
-    onOpenChat: (Contact) -> Unit,
-    onOpenSettings: () -> Unit,
-    onOpenContacts: () -> Unit,
-    onOpenAdmin: (() -> Unit)?
-) {
+private fun HomeScreen(myUid: String, allContacts: List<Contact>, onOpenChat: (Contact) -> Unit, onOpenSettings: () -> Unit, onOpenContacts: () -> Unit, onOpenAdmin: (() -> Unit)?) {
     val db = FirebaseFirestore.getInstance()
     var activeChats by remember { mutableStateOf(listOf<Map<String, Any>>()) }
 
     LaunchedEffect(myUid) {
-        db.collection("chats")
-            .whereArrayContains("participants", myUid)
-            .addSnapshotListener { snaps, _ ->
-                // Ordenamos manualmente por lastTimestamp de forma descendente 
-                // para que los chats más recientes aparezcan siempre arriba
-                activeChats = snaps?.documents?.map { it.data?.plus("id" to it.id) ?: emptyMap() }
-                    ?.sortedByDescending { it["lastTimestamp"] as? Long ?: 0L }
-                    ?: emptyList()
-            }
+        db.collection("chats").whereArrayContains("participants", myUid).addSnapshotListener { snaps, _ ->
+            activeChats = snaps?.documents?.map { it.data?.plus("id" to it.id) ?: emptyMap() }
+                ?.sortedByDescending { doc ->
+                    val ts = doc["lastTimestamp"]
+                    if (ts is com.google.firebase.Timestamp) ts.toDate().time else if (ts is Long) ts else 0L
+                } ?: emptyList()
+        }
     }
 
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
-                title = { Text("TextMeMail", fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.primary) },
+                title = { Text("LinkChat", fontWeight = FontWeight.ExtraBold, color = MaterialTheme.colorScheme.primary) },
                 actions = {
                     IconButton(onClick = onOpenSettings) { Icon(Icons.Default.Settings, null) }
                     if (onOpenAdmin != null) IconButton(onClick = onOpenAdmin) { Icon(Icons.Default.AdminPanelSettings, null, tint = Color.Red) }
@@ -435,28 +391,14 @@ private fun HomeScreen(
         } else {
             LazyColumn(modifier = Modifier.fillMaxSize().padding(padding)) {
                 items(activeChats) { chat ->
-                    val participants = chat["participants"] as? List<*>
-                    val otherUid = participants?.firstOrNull { it != myUid } as? String ?: ""
+                    val otherUid = (chat["participants"] as? List<*>)?.firstOrNull { it != myUid } as? String ?: ""
                     val contact = allContacts.find { it.uid == otherUid } ?: Contact(uid = otherUid, name = "Usuario")
-                    
                     var unreadCount by remember { mutableIntStateOf(0) }
                     LaunchedEffect(chat["id"]) {
-                        db.collection("chats").document(chat["id"] as String).collection("messages")
-                            .whereEqualTo("receiverId", myUid)
-                            .whereEqualTo("isRead", false)
-                            .addSnapshotListener { snaps, _ ->
-                                unreadCount = snaps?.size() ?: 0
-                            }
+                        db.collection("chats").document(chat["id"] as String).collection("messages").whereEqualTo("receiverId", myUid).whereEqualTo("isRead", false).addSnapshotListener { snaps, _ -> unreadCount = snaps?.size() ?: 0 }
                     }
-
-                    ChatListItem(
-                        contact = contact,
-                        lastMsg = chat["lastMessage"] as? String ?: "",
-                        time = chat["lastTimestamp"] as? Long ?: 0L,
-                        unreadCount = unreadCount,
-                        onClick = { onOpenChat(contact) }
-                    )
-                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp, color = Color.LightGray.copy(alpha = 0.5f))
+                    ChatListItem(contact = contact, lastMsg = chat["lastMessage"] as? String ?: "", time = (chat["lastTimestamp"] as? com.google.firebase.Timestamp)?.toDate()?.time ?: 0L, unreadCount = unreadCount, onClick = { onOpenChat(contact) })
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), thickness = 0.5.dp, color = Color.LightGray.copy(0.5f))
                 }
             }
         }
@@ -466,58 +408,26 @@ private fun HomeScreen(
 @Composable
 fun ChatListItem(contact: Contact, lastMsg: String, time: Long, unreadCount: Int, onClick: () -> Unit) {
     val sdf = remember { SimpleDateFormat("HH:mm", Locale.getDefault()) }
-    val colorUnread = Color(0xFF00BFA5) 
-    val colorBadge = Color(0xFF673AB7) 
-    
     ListItem(
         modifier = Modifier.clickable(onClick = onClick),
-        headlineContent = { Text(contact.name.ifBlank { contact.email }, fontWeight = FontWeight.Bold, fontSize = 16.sp) },
-        supportingContent = { 
-            Text(
-                lastMsg, 
-                maxLines = 1, 
-                overflow = TextOverflow.Ellipsis, 
-                color = if (unreadCount > 0) Color.Black else Color.Gray,
-                fontWeight = if (unreadCount > 0) FontWeight.Medium else FontWeight.Normal
-            ) 
-        },
+        headlineContent = { Text(contact.name.ifBlank { contact.email }, fontWeight = FontWeight.Bold) },
+        supportingContent = { Text(lastMsg, maxLines = 1, overflow = TextOverflow.Ellipsis) },
         leadingContent = {
             Surface(Modifier.size(52.dp), shape = CircleShape, color = MaterialTheme.colorScheme.primary.copy(0.1f)) {
                 Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        contact.name.take(1).ifBlank { contact.email.take(1) }.uppercase(), 
-                        fontSize = 20.sp, 
-                        fontWeight = FontWeight.Bold, 
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                    Text(contact.name.take(1).uppercase(), fontSize = 20.sp, fontWeight = FontWeight.Bold)
                     if (contact.isOnline) {
-                        Surface(
-                            modifier = Modifier.size(14.dp).align(Alignment.BottomEnd).offset(x = (-2).dp, y = (-2).dp),
-                            shape = CircleShape,
-                            color = Color.White
-                        ) {
-                            Box(modifier = Modifier.padding(2.dp).background(colorUnread, CircleShape))
+                        Surface(modifier = Modifier.size(12.dp).align(Alignment.BottomEnd).offset((-2).dp, (-2).dp), shape = CircleShape, color = Color.White) {
+                            Box(modifier = Modifier.padding(2.dp).background(Color(0xFF00BFA5), CircleShape))
                         }
                     }
                 }
             }
         },
         trailingContent = {
-            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.Center) {
-                Text(
-                    if (time > 0) sdf.format(Date(time)) else "", 
-                    fontSize = 12.sp, 
-                    color = if (unreadCount > 0) colorUnread else Color.Gray,
-                    fontWeight = if (unreadCount > 0) FontWeight.Bold else FontWeight.Normal
-                )
-                if (unreadCount > 0) {
-                    Spacer(Modifier.height(6.dp))
-                    Surface(color = colorBadge, shape = CircleShape, modifier = Modifier.size(24.dp)) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Text(unreadCount.toString(), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
+            Column(horizontalAlignment = Alignment.End) {
+                if (time > 0) Text(sdf.format(Date(time)), fontSize = 12.sp, color = Color.Gray)
+                if (unreadCount > 0) Badge { Text(unreadCount.toString()) }
             }
         }
     )
@@ -532,41 +442,21 @@ private fun SettingsScreen(currentLanguage: String, onSave: (String) -> Unit, on
             Text(stringResource(R.string.settings), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) 
         }
         Spacer(Modifier.height(32.dp))
-        
-        Text("Cuenta", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-        Spacer(Modifier.height(16.dp))
-        
-        // Botón de Cerrar Sesión (Visible y llamativo)
-        Card(
-            onClick = onLogout,
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE)),
-            shape = RoundedCornerShape(16.dp)
-        ) {
+        Card(onClick = onLogout, modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = Color(0xFFFFEBEE))) {
             Row(Modifier.padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.AutoMirrored.Filled.Logout, null, tint = Color.Red)
                 Spacer(Modifier.width(16.dp))
-                Text("Cerrar Sesión", color = Color.Red, fontWeight = FontWeight.ExtraBold, fontSize = 16.sp)
+                Text("Cerrar Sesión", color = Color.Red, fontWeight = FontWeight.ExtraBold)
             }
         }
-
         Spacer(Modifier.height(32.dp))
-        Text(stringResource(R.string.app_language), style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(selected = lang == "es", onClick = { lang = "es" }, label = { Text(stringResource(R.string.spanish)) }, shape = RoundedCornerShape(12.dp))
-            FilterChip(selected = lang == "en", onClick = { lang = "en" }, label = { Text(stringResource(R.string.english)) }, shape = RoundedCornerShape(12.dp))
+        Text("Idioma", style = MaterialTheme.typography.titleMedium)
+        Row {
+            FilterChip(selected = lang == "es", onClick = { lang = "es" }, label = { Text("Español") })
+            Spacer(Modifier.width(8.dp))
+            FilterChip(selected = lang == "en", onClick = { lang = "en" }, label = { Text("English") })
         }
-
         Spacer(Modifier.weight(1f))
-        
-        Button(
-            onClick = { onSave(lang) }, 
-            modifier = Modifier.fillMaxWidth().height(56.dp), 
-            shape = RoundedCornerShape(16.dp),
-            elevation = ButtonDefaults.buttonElevation(defaultElevation = 4.dp)
-        ) { 
-            Text(stringResource(R.string.save_changes), fontWeight = FontWeight.Bold)
-        }
+        Button(onClick = { onSave(lang) }, modifier = Modifier.fillMaxWidth().height(56.dp)) { Text("Guardar Cambios") }
     }
 }

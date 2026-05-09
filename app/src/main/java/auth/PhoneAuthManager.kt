@@ -1,7 +1,6 @@
 package auth
 
 import android.app.Activity
-import android.util.Log
 import com.google.firebase.FirebaseException
 import com.google.firebase.auth.*
 import com.google.firebase.firestore.FieldValue
@@ -15,154 +14,128 @@ class PhoneAuthManager(
 ) {
     private var verificationId: String? = null
 
-    /** Acceso rápido para el administrador (Bypass de SMS) */
-    fun quickAdminLogin(done: (ok: Boolean, message: String) -> Unit) {
-        val adminEmail = "admin@textmemail.com"
-        val adminPass = "admin123456"
+    /** Envía enlace de recuperación al correo */
+    fun sendPasswordReset(email: String, done: (Boolean, String) -> Unit) {
+        if (email.isBlank()) {
+            done(false, "Introduce un correo válido")
+            return
+        }
+        auth.sendPasswordResetEmail(email)
+            .addOnSuccessListener { done(true, "Enlace de recuperación enviado") }
+            .addOnFailureListener { done(false, "Error: ${it.localizedMessage}") }
+    }
 
-        auth.signInWithEmailAndPassword(adminEmail, adminPass)
+    /** Acceso rápido Admin */
+    fun quickAdminLogin(done: (ok: Boolean, message: String) -> Unit) {
+        auth.signInWithEmailAndPassword("admin@textmemail.com", "admin123456")
             .addOnCompleteListener { task ->
                 if (task.isSuccessful) {
                     val user = auth.currentUser
                     if (user != null) {
-                        val doc = mutableMapOf(
-                            "email" to adminEmail,
-                            "name" to "Administrador",
-                            "role" to "admin",
-                            "updatedAt" to FieldValue.serverTimestamp(),
-                            "isOnline" to true
+                        db.collection("users").document(user.uid).set(
+                            mapOf("role" to "admin", "isOnline" to true, "updatedAt" to FieldValue.serverTimestamp()), 
+                            SetOptions.merge()
                         )
-                        db.collection("users").document(user.uid)
-                            .set(doc, SetOptions.merge())
-                            .addOnSuccessListener { done(true, "Acceso Admin Correcto") }
-                            .addOnFailureListener { e -> done(false, "Error Firestore: ${e.localizedMessage}") }
+                        done(true, "Acceso Admin Correcto")
                     }
-                } else {
-                    val e = task.exception
-                    val errorMsg = when {
-                        e?.message?.contains("chain validation failed") == true -> 
-                            "ERROR DE RED: Revisa que la FECHA Y HORA de tu celular sean correctas y que tengas internet."
-                        else -> e?.localizedMessage ?: "Error desconocido"
-                    }
-                    Log.e("ADMIN_LOGIN", "Fallo: ${e?.message}")
-                    done(false, errorMsg)
-                }
+                } else done(false, "Error: ${task.exception?.localizedMessage}")
             }
     }
 
-    /** Actualiza el estado online/offline del usuario */
     fun setUserOnlineStatus(isOnline: Boolean) {
         val uid = auth.currentUser?.uid ?: return
-        db.collection("users").document(uid).update(
-            "isOnline", isOnline,
-            "lastSeen", FieldValue.serverTimestamp()
-        )
+        db.collection("users").document(uid).update("isOnline", isOnline, "lastSeen", FieldValue.serverTimestamp())
     }
 
-    /** Envía el código de verificación al teléfono */
-    fun sendVerificationCode(
-        activity: Activity,
-        phoneNumber: String,
-        onCodeSent: (Boolean, String?) -> Unit
-    ) {
+    fun sendVerificationCode(activity: Activity, phoneNumber: String, onCodeSent: (Boolean, String?) -> Unit) {
         val finalPhone = if (phoneNumber.startsWith("+")) phoneNumber else if (phoneNumber.length == 10) "+52$phoneNumber" else phoneNumber
-
         val options = PhoneAuthOptions.newBuilder(auth)
             .setPhoneNumber(finalPhone)
             .setTimeout(60L, TimeUnit.SECONDS)
             .setActivity(activity)
             .setCallbacks(object : PhoneAuthProvider.OnVerificationStateChangedCallbacks() {
                 override fun onVerificationCompleted(credential: PhoneAuthCredential) {}
-                override fun onVerificationFailed(e: FirebaseException) {
-                    val msg = when {
-                        e.message?.contains("billing") == true -> "ERROR: Facturación requerida para SMS reales. USA NÚMEROS DE PRUEBA."
-                        else -> e.localizedMessage
-                    }
-                    onCodeSent(false, msg)
-                }
+                override fun onVerificationFailed(e: FirebaseException) { onCodeSent(false, e.localizedMessage) }
                 override fun onCodeSent(id: String, token: PhoneAuthProvider.ForceResendingToken) {
-                    this@PhoneAuthManager.verificationId = id
+                    verificationId = id
                     onCodeSent(true, null)
                 }
-            })
-            .build()
+            }).build()
         PhoneAuthProvider.verifyPhoneNumber(options)
     }
 
-    /** Verifica el código ingresado */
-    fun verifyCode(code: String, name: String, language: String, done: (ok: Boolean, message: String) -> Unit) {
-        val id = verificationId ?: return done(false, "Primero envía el código.")
+    /** Lógica de verificación y registro vinculando Email/Pass */
+    fun verifyCode(
+        code: String, 
+        name: String, 
+        email: String, 
+        pass: String, 
+        language: String, 
+        isRegister: Boolean,
+        done: (ok: Boolean, message: String) -> Unit
+    ) {
+        val id = verificationId ?: return done(false, "Error de sesión (verificationId nulo)")
         val credential = PhoneAuthProvider.getCredential(id, code)
+        
         auth.signInWithCredential(credential).addOnCompleteListener { task ->
             if (task.isSuccessful) {
-                val user = auth.currentUser
-                if (user != null) {
-                    db.collection("users").document(user.uid).get().addOnSuccessListener { snap ->
-                        val doc = mutableMapOf<String, Any>(
-                            "phone" to (user.phoneNumber ?: ""),
-                            "updatedAt" to FieldValue.serverTimestamp(),
-                            "isOnline" to true
-                        )
-                        
-                        // Si el número es el teléfono maestro del Admin, le damos el rol de admin automáticamente
-                        val isMasterAdminPhone = user.phoneNumber == ADMIN_PHONE
-
-                        if (!snap.exists()) {
-                            doc["name"] = if (isMasterAdminPhone) "Administrador" else name
-                            doc["language"] = language
-                            doc["role"] = if (isMasterAdminPhone) "admin" else "user"
-                            doc["createdAt"] = FieldValue.serverTimestamp()
-                        } else {
-                            if (name.isNotBlank()) doc["name"] = name
-                            if (language.isNotBlank()) doc["language"] = language
-                            if (isMasterAdminPhone) doc["role"] = "admin"
-                        }
-
-                        db.collection("users").document(user.uid).set(doc, SetOptions.merge())
-                            .addOnSuccessListener { done(true, "¡Bienvenido!") }
+                val user = auth.currentUser ?: return@addOnCompleteListener
+                
+                if (isRegister && email.isNotBlank() && pass.isNotBlank()) {
+                    val emailCred = EmailAuthProvider.getCredential(email, pass)
+                    user.linkWithCredential(emailCred).addOnCompleteListener { 
+                        updateProfile(user, name, email, language, done)
                     }
+                } else {
+                    updateProfile(user, name, email, language, done)
                 }
             } else {
-                done(false, "Código incorrecto.")
+                done(false, "Código incorrecto")
             }
         }
     }
 
-    /** Actualización de idioma */
-    fun updateLanguage(newLanguage: String, done: (ok: Boolean, message: String) -> Unit) {
-        val uid = auth.currentUser?.uid ?: return done(false, "Sin sesión.")
-        db.collection("users").document(uid)
-            .set(mapOf("language" to newLanguage, "updatedAt" to FieldValue.serverTimestamp()), SetOptions.merge())
-            .addOnSuccessListener { done(true, "Idioma actualizado.") }
-            .addOnFailureListener { e -> done(false, e.localizedMessage ?: "Error") }
-    }
-
-    fun signOut() {
-        setUserOnlineStatus(false)
-        auth.signOut()
-    }
-
-    fun getCurrentUserRole(done: (ok: Boolean, role: String?, message: String) -> Unit) {
-        val uid = auth.currentUser?.uid ?: return done(false, null, "No hay sesión.")
-        db.collection("users").document(uid).get()
-            .addOnSuccessListener { snap ->
-                val role = snap.getString("role") ?: "user"
-                done(true, role, "OK")
+    private fun updateProfile(user: FirebaseUser, name: String, email: String, language: String, done: (Boolean, String) -> Unit) {
+        db.collection("users").document(user.uid).get().addOnSuccessListener { snap ->
+            val doc = mutableMapOf<String, Any>(
+                "phone" to (user.phoneNumber ?: ""),
+                "isOnline" to true,
+                "updatedAt" to FieldValue.serverTimestamp()
+            )
+            if (!snap.exists()) {
+                doc["name"] = name
+                doc["email"] = email
+                doc["language"] = language
+                doc["role"] = if (user.phoneNumber == "+528114805140") "admin" else "user"
+                doc["createdAt"] = FieldValue.serverTimestamp()
+            } else {
+                if (name.isNotBlank()) doc["name"] = name
+                if (email.isNotBlank()) doc["email"] = email
             }
-            .addOnFailureListener { e -> done(false, null, e.localizedMessage ?: "Error") }
+            db.collection("users").document(user.uid).set(doc, SetOptions.merge())
+                .addOnSuccessListener { done(true, "Acceso correcto") }
+                .addOnFailureListener { done(false, it.localizedMessage ?: "Error al guardar perfil") }
+        }
+    }
+
+    fun signOut() { setUserOnlineStatus(false); auth.signOut() }
+    
+    fun getCurrentUserRole(done: (ok: Boolean, role: String?, message: String) -> Unit) {
+        val uid = auth.currentUser?.uid ?: return done(false, null, "")
+        db.collection("users").document(uid).get().addOnSuccessListener { done(true, it.getString("role"), "") }
     }
 
     fun isCurrentUserAdmin(): Boolean {
-        val user = auth.currentUser ?: return false
-        return user.email == "admin@textmemail.com" || user.email == "admin@linkchat.com" || user.phoneNumber == ADMIN_PHONE
+        val u = auth.currentUser ?: return false
+        return u.email == "admin@textmemail.com" || u.phoneNumber == "+528114805140"
     }
 
-    companion object {
-        // ACTUALIZADO: Nuevo teléfono de administrador real
-        const val ADMIN_PHONE = "+528114805140"
+    fun updateLanguage(lang: String, done: (Boolean, String) -> Unit) {
+        val uid = auth.currentUser?.uid ?: return
+        db.collection("users").document(uid).update("language", lang).addOnSuccessListener { done(true, "") }
     }
 
-    fun deleteUserFromFirestore(uid: String, done: (ok: Boolean, message: String) -> Unit) {
-        db.collection("users").document(uid).delete().addOnSuccessListener { done(true, "Eliminado") }
+    fun deleteUserFromFirestore(uid: String, done: (Boolean, String) -> Unit) {
+        db.collection("users").document(uid).delete().addOnSuccessListener { done(true, "") }
     }
 }

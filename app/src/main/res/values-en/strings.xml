@@ -27,6 +27,7 @@
     <string name="message_options">Message options</string>
     <string name="forward_to">Forward to...</string>
     <string name="message_forwarded">Message forwarded</string>
+    <string name="search_contacts">Search contacts...</string>
 
     <!-- Auth -->
     <string name="login">Login</string>
